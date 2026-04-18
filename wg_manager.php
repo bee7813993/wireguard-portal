@@ -172,21 +172,34 @@ class WgManager {
         $conf      = self::build_full_server_conf();
         $conf_path = "/etc/wireguard/{$iface}.conf";
 
-        if (file_put_contents($conf_path, $conf) === false) {
+        // sudo tee で root 権限が必要なパスへ書き込み
+        $proc = proc_open(
+            'sudo tee ' . escapeshellarg($conf_path) . ' > /dev/null',
+            [0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w']],
+            $pipes
+        );
+        if (!is_resource($proc)) {
             return ['success' => false, 'output' => "設定ファイルの書き込みに失敗しました: {$conf_path}"];
         }
-        chmod($conf_path, 0600);
+        fwrite($pipes[0], $conf);
+        fclose($pipes[0]);
+        $err      = stream_get_contents($pipes[2]);
+        $writeRet = proc_close($proc);
+        if ($writeRet !== 0) {
+            return ['success' => false, 'output' => "書き込みエラー: " . trim($err)];
+        }
+        exec('sudo chmod 600 ' . escapeshellarg($conf_path));
 
         // インターフェースが起動中か確認
-        exec('wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
+        exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
 
         if ($running === 0) {
-            exec('wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
-            exec('wg-quick up '   . escapeshellarg($iface) . ' 2>&1', $out2, $s2);
+            exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
+            exec('sudo wg-quick up '   . escapeshellarg($iface) . ' 2>&1', $out2, $s2);
             $output  = implode("\n", array_merge($out1, $out2));
             $success = ($s2 === 0);
         } else {
-            exec('wg-quick up ' . escapeshellarg($iface) . ' 2>&1', $out, $s);
+            exec('sudo wg-quick up ' . escapeshellarg($iface) . ' 2>&1', $out, $s);
             $output  = implode("\n", $out);
             $success = ($s === 0);
         }
