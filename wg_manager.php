@@ -7,25 +7,28 @@ require_once __DIR__ . '/config.php';
 class WgManager {
 
     // ---- IPアドレスのオクテット割り当て -----------------
-    // port → 固定の client IP を割り当て (サブネット内で衝突しないよう管理)
-    // .1 = サーバー固定, .2〜.254 = クライアント用
     private static function get_client_ip(int $port): string {
         $db = get_db();
 
-        // 既存エントリがあればそのIPを返す
         $row = $db->prepare("SELECT rowid FROM wg_configs WHERE port = ?");
         $row->execute([$port]);
         $existing = $row->fetch();
 
         if ($existing) {
-            // rowid ベースで 2〜254 を割り当て
             $octet = (($existing['rowid'] - 1) % 253) + 2;
         } else {
-            // 新規: 現在の最大 rowid + 1 を先読み
-            $max = (int)$db->query("SELECT IFNULL(MAX(rowid),0) FROM wg_configs")->fetchColumn();
+            $max   = (int)$db->query("SELECT IFNULL(MAX(rowid),0) FROM wg_configs")->fetchColumn();
             $octet = ($max % 253) + 2;
         }
         return get_setting('subnet') . '.' . $octet;
+    }
+
+    // ---- インターフェース名バリデーション ---------------
+    private static function sanitize_interface(string $iface): string {
+        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{0,14}$/', $iface)) {
+            throw new RuntimeException('不正なインターフェース名です。');
+        }
+        return $iface;
     }
 
     // ---- Windows クライアント用 .conf 生成 ---------------
@@ -50,7 +53,51 @@ class WgManager {
              . "PersistentKeepalive = 25\n";
     }
 
-    // ---- VPS サーバー用 wg0.conf 生成 -------------------
+    // ---- 全ピアを含む完全サーバー設定ファイル生成 --------
+    public static function build_full_server_conf(): string {
+        $server_kp = get_or_create_server_keypair();
+        $subnet    = get_setting('subnet');
+        $server_ip = $subnet . '.1';
+        $wg_port   = get_setting('wg_port');
+        $nic       = get_setting('nic');
+        $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+
+        $db   = get_db();
+        $rows = $db->query("SELECT rowid, port, client_pub FROM wg_configs ORDER BY rowid ASC")->fetchAll();
+
+        // MASQUERADE は一度だけ
+        $up_lines   = ["iptables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE"];
+        $down_lines = ["iptables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE"];
+
+        $peer_blocks = '';
+        foreach ($rows as $row) {
+            $octet     = (($row['rowid'] - 1) % 253) + 2;
+            $client_ip = $subnet . '.' . $octet;
+            $port      = (int)$row['port'];
+
+            $up_lines[]   = "iptables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
+            $up_lines[]   = "iptables -A FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
+            $down_lines[] = "iptables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
+            $down_lines[] = "iptables -D FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
+
+            $peer_blocks .= "\n[Peer]\n"
+                         .  "PublicKey = {$row['client_pub']}\n"
+                         .  "AllowedIPs = {$client_ip}/32\n";
+        }
+
+        $conf = "[Interface]\n"
+              . "Address = {$server_ip}/24\n"
+              . "ListenPort = {$wg_port}\n"
+              . "PrivateKey = {$server_kp['priv']}\n"
+              . "\n";
+
+        foreach ($up_lines   as $rule) $conf .= "PostUp   = {$rule}\n";
+        foreach ($down_lines as $rule) $conf .= "PostDown = {$rule}\n";
+
+        return $conf . $peer_blocks;
+    }
+
+    // ---- VPS サーバー用 wg.conf 生成 (単一ポート・後方互換) ---
     public static function build_server_conf_snippet(
         string $server_priv,
         string $client_pub,
@@ -60,9 +107,10 @@ class WgManager {
     ): string {
         $wg_port = get_setting('wg_port');
         $nic     = get_setting('nic');
+        $iface   = get_setting('wg_interface') ?: 'wg0';
 
-        $post_up   = self::iptables_rules($nic, $ext_port, $client_ip, '-A', '-A');
-        $post_down = self::iptables_rules($nic, $ext_port, $client_ip, '-D', '-D');
+        $post_up   = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-A', '-A');
+        $post_down = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-D', '-D');
 
         return "[Interface]\n"
              . "Address = {$server_ip}/24\n"
@@ -83,6 +131,7 @@ class WgManager {
 
     private static function iptables_rules(
         string $nic,
+        string $iface,
         int    $ext_port,
         string $client_ip,
         string $nat_flag,
@@ -91,23 +140,25 @@ class WgManager {
         return [
             "iptables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} -j DNAT --to-destination {$client_ip}:80",
             "iptables {$fwd_flag} FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT",
-            "iptables -t nat {$nat_flag} POSTROUTING -o wg0 -j MASQUERADE",
+            "iptables -t nat {$nat_flag} POSTROUTING -o {$iface} -j MASQUERADE",
         ];
     }
 
     // ---- セットアップコマンド生成 -------------------------
     public static function build_setup_commands(int $ext_port): string {
         $wg_port = get_setting('wg_port');
+        $iface   = get_setting('wg_interface') ?: 'wg0';
+
         return "# 1. WireGuardインストール\n"
              . "sudo apt update && sudo apt install wireguard -y\n\n"
              . "# 2. IPフォワーディングを有効化\n"
              . "echo \"net.ipv4.ip_forward=1\" | sudo tee -a /etc/sysctl.conf\n"
              . "sudo sysctl -p\n\n"
-             . "# 3. wg0.conf を配置 (上の内容を保存)\n"
-             . "sudo nano /etc/wireguard/wg0.conf\n\n"
+             . "# 3. {$iface}.conf を配置 (上の内容を保存)\n"
+             . "sudo nano /etc/wireguard/{$iface}.conf\n\n"
              . "# 4. 起動・自動起動\n"
-             . "sudo wg-quick up wg0\n"
-             . "sudo systemctl enable wg-quick@wg0\n\n"
+             . "sudo wg-quick up {$iface}\n"
+             . "sudo systemctl enable wg-quick@{$iface}\n\n"
              . "# 5. ファイアウォール開放\n"
              . "sudo ufw allow {$wg_port}/udp\n"
              . "sudo ufw allow {$ext_port}/tcp\n\n"
@@ -115,18 +166,45 @@ class WgManager {
              . "sudo wg show\n";
     }
 
+    // ---- サーバーへ設定を適用 ----------------------------
+    public static function apply_server_config(): array {
+        $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+        $conf      = self::build_full_server_conf();
+        $conf_path = "/etc/wireguard/{$iface}.conf";
+
+        if (file_put_contents($conf_path, $conf) === false) {
+            return ['success' => false, 'output' => "設定ファイルの書き込みに失敗しました: {$conf_path}"];
+        }
+        chmod($conf_path, 0600);
+
+        // インターフェースが起動中か確認
+        exec('wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
+
+        if ($running === 0) {
+            exec('wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
+            exec('wg-quick up '   . escapeshellarg($iface) . ' 2>&1', $out2, $s2);
+            $output  = implode("\n", array_merge($out1, $out2));
+            $success = ($s2 === 0);
+        } else {
+            exec('wg-quick up ' . escapeshellarg($iface) . ' 2>&1', $out, $s);
+            $output  = implode("\n", $out);
+            $success = ($s === 0);
+        }
+
+        return ['success' => $success, 'output' => trim($output)];
+    }
+
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
     public static function issue(int $port): array {
         $db        = get_db();
+        $server_kp = get_or_create_server_keypair();
         $client_kp = wg_generate_keypair();
-        $server_kp = wg_generate_keypair();
         $subnet    = get_setting('subnet');
         $server_ip = $subnet . '.1';
 
-        // 先にclient_ipを決定するため一時的にDB操作順序を調整
         $client_ip = self::get_client_ip($port);
 
-        // UPSERT
+        // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
             INSERT INTO wg_configs (port, client_priv, client_pub, server_priv, server_pub, updated_at)
             VALUES (:port, :cp, :cP, :sp, :sP, CURRENT_TIMESTAMP)
@@ -147,10 +225,14 @@ class WgManager {
         $client_conf = self::build_client_conf(
             $client_kp['priv'], $server_kp['pub'], $client_ip, $server_ip
         );
-        $server_conf = self::build_server_conf_snippet(
-            $server_kp['priv'], $client_kp['pub'], $server_ip, $client_ip, $port
-        );
-        $setup_cmds = self::build_setup_commands($port);
+        // UPSERT 後に呼ぶことで今回のピアを含む完全設定を返す
+        $server_conf = self::build_full_server_conf();
+        $setup_cmds  = self::build_setup_commands($port);
+
+        $applied = null;
+        if (get_setting('auto_apply') === '1') {
+            $applied = self::apply_server_config();
+        }
 
         return [
             'port'        => $port,
@@ -158,6 +240,7 @@ class WgManager {
             'client_conf' => $client_conf,
             'server_conf' => $server_conf,
             'setup_cmds'  => $setup_cmds,
+            'applied'     => $applied,
         ];
     }
 }

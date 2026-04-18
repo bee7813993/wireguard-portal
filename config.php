@@ -40,11 +40,13 @@ function get_db(): PDO {
 
     // デフォルト設定を挿入 (初回のみ)
     $defaults = [
-        'vps_ip'     => '203.0.113.1',
-        'wg_port'    => '51820',
-        'nic'        => 'eth0',
-        'subnet'     => '10.0.0',
-        'admin_pass' => password_hash('changeme', PASSWORD_DEFAULT),
+        'vps_ip'       => '203.0.113.1',
+        'wg_port'      => '51820',
+        'nic'          => 'eth0',
+        'subnet'       => '10.0.0',
+        'wg_interface' => 'wg0',
+        'auto_apply'   => '0',
+        'admin_pass'   => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
     foreach ($defaults as $k => $v) $stmt->execute([':k' => $k, ':v' => $v]);
@@ -72,6 +74,18 @@ function require_admin(): void {
         header('Location: admin.php');
         exit;
     }
+}
+
+// ---- グローバルサーバー鍵 (インターフェース用・初回生成) ----
+function get_or_create_server_keypair(): array {
+    $priv = get_setting('server_priv');
+    $pub  = get_setting('server_pub');
+    if ($priv && $pub) return ['priv' => $priv, 'pub' => $pub];
+
+    $kp = wg_generate_keypair();
+    set_setting('server_priv', $kp['priv']);
+    set_setting('server_pub',  $kp['pub']);
+    return $kp;
 }
 
 // ---- WireGuard 鍵生成 (Curve25519) ----------------------

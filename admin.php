@@ -68,10 +68,12 @@ button:hover{opacity:.85}
 
 // ---- 設定保存 --------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $fields = ['vps_ip','wg_port','nic','subnet'];
+    $fields = ['vps_ip','wg_port','nic','subnet','wg_interface'];
     foreach ($fields as $f) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
+    // チェックボックスは未チェック時に送信されないため個別処理
+    set_setting('auto_apply', isset($_POST['auto_apply']) ? '1' : '0');
     // パスワード変更
     if (!empty($_POST['new_pass'])) {
         if ($_POST['new_pass'] === ($_POST['new_pass_confirm'] ?? '')) {
@@ -86,10 +88,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ---- 現在値 -----------------------------------------------
 $cfg = [
-    'vps_ip'  => get_setting('vps_ip'),
-    'wg_port' => get_setting('wg_port'),
-    'nic'     => get_setting('nic'),
-    'subnet'  => get_setting('subnet'),
+    'vps_ip'       => get_setting('vps_ip'),
+    'wg_port'      => get_setting('wg_port'),
+    'nic'          => get_setting('nic'),
+    'subnet'       => get_setting('subnet'),
+    'wg_interface' => get_setting('wg_interface') ?: 'wg0',
+    'auto_apply'   => get_setting('auto_apply'),
 ];
 
 // ---- 発行済みポート一覧 -----------------------------------
@@ -166,6 +170,19 @@ tr:last-child td{border-bottom:none}
           <label>WireGuard サブネット (先頭3オクテット)</label>
           <div class="desc">例: 10.0.0 → サーバー 10.0.0.1, クライアントは 10.0.0.2〜</div>
           <input type="text" name="subnet" value="<?= htmlspecialchars($cfg['subnet']) ?>" placeholder="10.0.0">
+        </div>
+        <div class="field">
+          <label>WireGuard インターフェース名</label>
+          <div class="desc">wg0 がすでに使用中の場合は wg1 や vpn0 など別名を指定</div>
+          <input type="text" name="wg_interface" value="<?= htmlspecialchars($cfg['wg_interface']) ?>" placeholder="wg0">
+        </div>
+        <div class="field">
+          <label>設定生成時に自動適用</label>
+          <div class="desc">有効にすると生成ボタン押下時に /etc/wireguard/{interface}.conf へ書き込み wg-quick で適用します (要 root 権限)</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0;margin-top:4px">
+            <input type="checkbox" name="auto_apply" value="1" <?= $cfg['auto_apply'] === '1' ? 'checked' : '' ?> style="width:16px;height:16px;accent-color:var(--accent)">
+            自動適用を有効にする
+          </label>
         </div>
 
         <div class="divider"></div>

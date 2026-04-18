@@ -1,4 +1,9 @@
 <!DOCTYPE html>
+<?php
+require_once __DIR__ . '/config.php';
+$wg_iface   = htmlspecialchars(get_setting('wg_interface') ?: 'wg0');
+$auto_apply = get_setting('auto_apply') === '1';
+?>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -169,6 +174,19 @@ main {
   gap: 10px;
 }
 .warn-icon { flex-shrink: 0; margin-top: 1px; }
+
+/* ---- Apply status ---- */
+.apply-card {
+  border-radius: 10px;
+  padding: 14px 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.apply-ok  { background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.25); color: var(--accent); }
+.apply-err { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25); color: #f87171; }
+.apply-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.apply-output { white-space: pre-wrap; color: var(--muted); margin-top: 6px; font-size: 11px; }
 
 /* ---- Result panels ---- */
 #result-area { width: 100%; max-width: 540px; display: none; flex-direction: column; gap: 1.25rem; }
@@ -351,9 +369,14 @@ footer a:hover { color: var(--text); }
 
     <div class="step-list" style="width:100%;max-width:540px;margin-bottom:.5rem">
       <div class="step"><span class="step-num">1</span><span>「Windows クライアント設定」を .conf としてダウンロードし、WireGuard for Windows でインポートする。</span></div>
-      <div class="step"><span class="step-num">2</span><span>「VPS サーバー設定」を /etc/wireguard/wg0.conf に保存する。</span></div>
+      <?php if ($auto_apply): ?>
+      <div class="step"><span class="step-num">2</span><span>VPS サーバー設定は自動適用されます。適用結果を確認してください。</span></div>
+      <div class="step"><span class="step-num">3</span><span>Windows 側でトンネルを有効化する。</span></div>
+      <?php else: ?>
+      <div class="step"><span class="step-num">2</span><span>「VPS サーバー設定」を /etc/wireguard/<?= $wg_iface ?>.conf に保存する。</span></div>
       <div class="step"><span class="step-num">3</span><span>「セットアップコマンド」を VPS で順番に実行する。</span></div>
       <div class="step"><span class="step-num">4</span><span>Windows 側でトンネルを有効化する。</span></div>
+      <?php endif; ?>
     </div>
 
     <!-- Windows クライアント設定 -->
@@ -373,12 +396,15 @@ footer a:hover { color: var(--text); }
       </div>
     </div>
 
+    <!-- 自動適用結果 -->
+    <div id="apply-result" style="display:none"></div>
+
     <!-- VPS 設定 -->
     <div class="result-card">
       <div class="result-header" onclick="togglePanel('panel-vps', this)">
         <div class="result-title">
           <span class="badge badge-vps">VPS</span>
-          サーバー設定 (wg0.conf)
+          サーバー設定 (<?= $wg_iface ?>.conf)
         </div>
         <span class="chevron">▾</span>
       </div>
@@ -455,6 +481,21 @@ async function doGenerate() {
     setText('vps-conf-block', d.server_conf);
     setText('cmd-block',      d.setup_cmds);
 
+    // 自動適用結果の表示
+    const applyEl = document.getElementById('apply-result');
+    if (d.applied !== null && d.applied !== undefined) {
+      const ok  = d.applied.success;
+      const out = d.applied.output || '';
+      applyEl.innerHTML =
+        `<div class="apply-card ${ok ? 'apply-ok' : 'apply-err'}">` +
+        `<div class="apply-title">${ok ? '✓ サーバーへの適用が完了しました' : '✗ サーバーへの適用に失敗しました'}</div>` +
+        (out ? `<div class="apply-output">${escHtml(out)}</div>` : '') +
+        `</div>`;
+      applyEl.style.display = 'block';
+    } else {
+      applyEl.style.display = 'none';
+    }
+
     const area = document.getElementById('result-area');
     area.style.display = 'flex';
     area.style.flexDirection = 'column';
@@ -466,6 +507,10 @@ async function doGenerate() {
     btn.disabled = false;
     label.textContent = '設定を再生成する';
   }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function setText(id, text) {
