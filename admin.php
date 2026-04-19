@@ -37,18 +37,20 @@ if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
 <title>管理画面ログイン – WireGuard Portal</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0f12;--surface:#13161b;--border:#1e2330;--border2:#2a3044;--accent:#4ade80;--text:#e2e8f0;--muted:#64748b;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans JP',sans-serif;}
+:root{--bg:#f0f4f8;--surface:#fff;--border:#dde5ef;--border2:#c9d5e4;--accent:#059669;--text:#1e293b;--muted:#6b7f96;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans JP',sans-serif;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;display:grid;place-items:center}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2.5rem 2rem;width:100%;max-width:360px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:2.5rem 2rem;width:100%;max-width:360px;box-shadow:0 4px 20px rgba(30,50,80,.1)}
 h1{font-family:var(--mono);font-size:18px;font-weight:500;margin-bottom:1.75rem;color:var(--text)}
 h1 span{color:var(--accent)}
 label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
-input[type=password]{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;font-family:var(--mono);font-size:15px;color:var(--text);outline:none;transition:border-color .15s;margin-bottom:1rem}
-input:focus{border-color:var(--accent)}
-button{width:100%;padding:11px;background:var(--accent);color:#0d1a12;font-family:var(--mono);font-size:14px;font-weight:500;border:none;border-radius:8px;cursor:pointer;transition:opacity .15s}
-button:hover{opacity:.85}
-.err{font-size:13px;color:#f87171;font-family:var(--mono);margin-bottom:1rem}
+input[type=password]{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:11px 14px;font-family:var(--mono);font-size:15px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;margin-bottom:1rem}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
+button{width:100%;padding:12px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:14px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.3)}
+button:hover{opacity:.9}
+.err{font-size:13px;color:#dc2626;font-family:var(--mono);margin-bottom:1rem;background:#fef2f2;border:1px solid #fca5a5;padding:8px 12px;border-radius:7px}
+.back{display:block;text-align:center;margin-top:1.25rem;font-size:12px;font-family:var(--mono);color:var(--muted);text-decoration:none}
+.back:hover{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -60,6 +62,7 @@ button:hover{opacity:.85}
     <input type="password" name="password" autofocus autocomplete="current-password">
     <button type="submit">ログイン</button>
   </form>
+  <a href="index.php" class="back">← トップへ戻る</a>
 </div>
 </body>
 </html>
@@ -131,54 +134,66 @@ if (file_exists($log_path)) {
 <title>管理画面 – WireGuard Portal</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0f12;--surface:#13161b;--border:#1e2330;--border2:#2a3044;--accent:#4ade80;--text:#e2e8f0;--muted:#64748b;--err:#f87171;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans JP',sans-serif;}
+:root{
+  --bg:#f0f4f8;--surface:#fff;--border:#dde5ef;--border2:#c9d5e4;
+  --accent:#059669;--accent2:#0284c7;--text:#1e293b;--muted:#6b7f96;
+  --err:#dc2626;--mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans JP',sans-serif;
+  --shadow:0 2px 12px rgba(30,50,80,.08);--shadow2:0 1px 4px rgba(30,50,80,.06);
+}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh}
-header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between}
-.logo{font-family:var(--mono);font-size:14px;letter-spacing:.08em}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--shadow2)}
+.logo{font-family:var(--mono);font-size:14px;letter-spacing:.06em;color:var(--text)}
 .logo span{color:var(--accent)}
-.logout{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;padding:4px 12px;border:1px solid var(--border2);border-radius:6px}
-.logout:hover{color:var(--text);border-color:var(--muted)}
+.header-links{display:flex;align-items:center;gap:.75rem}
+.top-link{font-family:var(--mono);font-size:12px;color:var(--accent2);text-decoration:none;padding:4px 12px;border:1px solid #bae6fd;border-radius:6px;background:#f0f9ff;transition:background .12s,border-color .12s}
+.top-link:hover{background:#e0f2fe;border-color:var(--accent2)}
+.logout{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;padding:4px 12px;border:1px solid var(--border2);border-radius:6px;background:var(--surface);transition:background .12s,color .12s}
+.logout:hover{color:var(--text);background:#f3f7fa}
 main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direction:column;gap:2rem}
-h2{font-family:var(--mono);font-size:14px;font-weight:500;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:1.25rem}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.75rem}
+.section-title{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:1rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.75rem;box-shadow:var(--shadow)}
 .field{margin-bottom:1rem}
 .field:last-of-type{margin-bottom:0}
 label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px}
-.desc{font-size:12px;color:var(--muted);margin-bottom:7px;font-family:var(--mono)}
-input[type=text],input[type=number],input[type=password]{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s}
-input:focus{border-color:var(--accent)}
+.desc{font-size:12px;color:var(--muted);margin-bottom:7px}
+input[type=text],input[type=number],input[type=password]{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
 .divider{border:none;border-top:1px solid var(--border);margin:1.5rem 0}
-.save-btn{padding:9px 24px;background:var(--accent);color:#0d1a12;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:8px;cursor:pointer;transition:opacity .15s}
-.save-btn:hover{opacity:.85}
-.msg-ok{font-size:13px;color:var(--accent);font-family:var(--mono);margin-bottom:1rem}
-.msg-err{font-size:13px;color:var(--err);font-family:var(--mono);margin-bottom:1rem}
+.save-btn{padding:10px 28px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.25)}
+.save-btn:hover{opacity:.9}
+.msg-ok{font-size:13px;color:#166534;font-family:var(--mono);margin-bottom:1rem;background:#f0fdf4;border:1px solid #86efac;padding:10px 14px;border-radius:8px}
+.msg-err{font-size:13px;color:var(--err);font-family:var(--mono);margin-bottom:1rem;background:#fef2f2;border:1px solid #fca5a5;padding:10px 14px;border-radius:8px}
 table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
-th{text-align:left;padding:8px 10px;color:var(--muted);font-weight:400;border-bottom:1px solid var(--border);letter-spacing:.04em}
-td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all;vertical-align:middle}
+th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:500;background:#f8fafc;border-bottom:1px solid var(--border);letter-spacing:.04em;font-size:11px}
+td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all;vertical-align:middle}
 tr:last-child td{border-bottom:none}
-.port-badge{display:inline-block;padding:2px 10px;background:rgba(74,222,128,.1);color:var(--accent);border:1px solid rgba(74,222,128,.2);border-radius:4px;font-size:11px}
-.no-rows{text-align:center;padding:1.5rem;color:var(--muted);font-family:var(--mono);font-size:13px}
-.del-btn{padding:3px 12px;background:transparent;border:1px solid rgba(248,113,113,.3);border-radius:4px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap}
-.del-btn:hover{background:rgba(248,113,113,.1);border-color:var(--err)}
-.log-area{max-height:360px;overflow-y:auto;padding:1rem;background:var(--bg);font-family:var(--mono);font-size:11px;line-height:1.7}
+tr:hover td{background:#fafbfc}
+.port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
+.no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
+.del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
+.del-btn:hover{background:#fef2f2;border-color:var(--err)}
+.log-area{max-height:360px;overflow-y:auto;padding:1rem;background:#f8fafc;font-family:var(--mono);font-size:11px;line-height:1.75;border-radius:0 0 14px 14px}
 .log-line{color:var(--muted);white-space:pre-wrap;word-break:break-all}
 .log-line.info{color:var(--text)}
 .log-line.error{color:var(--err)}
-.no-log{text-align:center;padding:1.5rem;color:var(--muted);font-family:var(--mono);font-size:13px}
+.no-log{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 </style>
 </head>
 <body>
 <header>
   <span class="logo">WireGuard <span>Portal</span> — Admin</span>
-  <a href="?logout=1" class="logout">ログアウト</a>
+  <div class="header-links">
+    <a href="index.php" class="top-link">← トップ</a>
+    <a href="?logout=1" class="logout">ログアウト</a>
+  </div>
 </header>
 
 <main>
 
   <!-- システム設定 -->
   <div>
-    <h2>システム設定</h2>
+    <div class="section-title">システム設定</div>
     <div class="card">
       <?php if ($success): ?><p class="msg-ok"><?= htmlspecialchars($success) ?></p><?php endif; ?>
       <?php if ($error):   ?><p class="msg-err"><?= htmlspecialchars($error) ?></p><?php endif; ?>
@@ -211,14 +226,14 @@ tr:last-child td{border-bottom:none}
         <div class="field">
           <label>設定生成時に自動適用</label>
           <div class="desc">有効にすると生成ボタン押下時に /etc/wireguard/{interface}.conf へ書き込み wg-quick で適用します (要 root 権限)</div>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0;margin-top:6px;cursor:pointer">
             <input type="checkbox" name="auto_apply" value="1" <?= $cfg['auto_apply'] === '1' ? 'checked' : '' ?> style="width:16px;height:16px;accent-color:var(--accent)">
             自動適用を有効にする
           </label>
         </div>
 
         <div class="divider"></div>
-        <h2 style="margin-bottom:1rem">パスワード変更 (省略可)</h2>
+        <div class="section-title" style="margin-bottom:1rem">パスワード変更 (省略可)</div>
         <div class="field">
           <label>新しいパスワード</label>
           <input type="password" name="new_pass" autocomplete="new-password">
@@ -236,7 +251,7 @@ tr:last-child td{border-bottom:none}
 
   <!-- 発行済みポート一覧 -->
   <div>
-    <h2>発行済みポート一覧</h2>
+    <div class="section-title">発行済みポート一覧</div>
     <div class="card" style="padding:0;overflow:hidden">
       <?php if (empty($rows)): ?>
         <p class="no-rows">まだ発行されていません</p>
@@ -247,7 +262,7 @@ tr:last-child td{border-bottom:none}
             <th>ポート</th>
             <th>クライアント公開鍵</th>
             <th>最終更新</th>
-            <th style="width:70px"></th>
+            <th style="width:72px"></th>
           </tr>
         </thead>
         <tbody>
@@ -273,7 +288,7 @@ tr:last-child td{border-bottom:none}
 
   <!-- ログ -->
   <div>
-    <h2>アクティビティログ</h2>
+    <div class="section-title">アクティビティログ</div>
     <div class="card" style="padding:0;overflow:hidden">
       <?php if (empty($log_lines)): ?>
         <p class="no-log">ログがありません</p>

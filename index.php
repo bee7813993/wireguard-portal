@@ -13,16 +13,18 @@ $auto_apply = get_setting('auto_apply') === '1';
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg:      #0d0f12;
-  --surface: #13161b;
-  --border:  #1e2330;
-  --border2: #2a3044;
-  --accent:  #4ade80;
-  --accent2: #22d3ee;
-  --text:    #e2e8f0;
-  --muted:   #64748b;
+  --bg:      #f0f4f8;
+  --surface: #ffffff;
+  --border:  #dde5ef;
+  --border2: #c9d5e4;
+  --accent:  #059669;
+  --accent2: #0284c7;
+  --text:    #1e293b;
+  --muted:   #6b7f96;
   --mono:    'IBM Plex Mono', monospace;
   --sans:    'IBM Plex Sans JP', sans-serif;
+  --shadow:  0 2px 12px rgba(30,50,80,.08);
+  --shadow2: 0 1px 4px rgba(30,50,80,.06);
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 16px; }
@@ -37,21 +39,23 @@ body {
 
 /* ---- Header ---- */
 header {
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 1.25rem 2rem;
+  padding: 1rem 2rem;
   display: flex;
   align-items: center;
   gap: 12px;
+  box-shadow: var(--shadow2);
 }
 .logo-mark {
-  width: 28px; height: 28px;
-  border: 1.5px solid var(--accent);
-  border-radius: 6px;
+  width: 30px; height: 30px;
+  background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+  border-radius: 8px;
   display: grid;
   place-items: center;
 }
 .logo-mark svg { width: 16px; height: 16px; }
-.logo-text { font-family: var(--mono); font-size: 14px; letter-spacing: .08em; color: var(--text); }
+.logo-text { font-family: var(--mono); font-size: 14px; letter-spacing: .06em; color: var(--text); }
 .logo-text span { color: var(--accent); }
 
 /* ---- Main layout ---- */
@@ -60,28 +64,27 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 3.5rem 1.5rem 3rem;
-  gap: 2.5rem;
+  padding: 3rem 1.5rem 2.5rem;
+  gap: 2rem;
 }
 
 /* ---- Hero ---- */
-.hero {
-  text-align: center;
-}
+.hero { text-align: center; }
 .hero h1 {
   font-family: var(--mono);
-  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  font-size: clamp(1.4rem, 4vw, 2rem);
   font-weight: 500;
   letter-spacing: -.01em;
-  line-height: 1.2;
-  margin-bottom: .75rem;
+  line-height: 1.25;
+  margin-bottom: .65rem;
+  color: var(--text);
 }
 .hero h1 em { font-style: normal; color: var(--accent); }
 .hero p {
   font-size: 14px;
   color: var(--muted);
-  line-height: 1.7;
-  max-width: 42ch;
+  line-height: 1.75;
+  max-width: 40ch;
   margin: 0 auto;
 }
 
@@ -91,33 +94,25 @@ main {
   max-width: 540px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 1.5rem;
+  box-shadow: var(--shadow);
 }
 .guide-title {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   color: var(--muted);
-  letter-spacing: .08em;
+  letter-spacing: .1em;
   text-transform: uppercase;
-  margin-bottom: 1rem;
+  margin-bottom: 1.1rem;
 }
-.guide-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.guide-step {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
+.guide-steps { display: flex; flex-direction: column; gap: 12px; }
+.guide-step  { display: flex; gap: 12px; align-items: flex-start; }
 .guide-num {
-  width: 22px; height: 22px;
+  width: 24px; height: 24px;
   border-radius: 50%;
-  background: rgba(74,222,128,.12);
-  border: 1px solid rgba(74,222,128,.25);
+  background: #d1fae5;
   display: grid;
   place-items: center;
   font-family: var(--mono);
@@ -127,32 +122,27 @@ main {
   flex-shrink: 0;
   margin-top: 1px;
 }
-.guide-text {
-  font-size: 13px;
-  color: var(--text);
-  line-height: 1.6;
-}
+.guide-text { font-size: 13px; color: var(--text); line-height: 1.6; }
 .guide-text em {
   font-style: normal;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--accent2);
+  background: #e0f2fe;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
-.guide-sub {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-  font-family: var(--mono);
-}
+.guide-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
 
 /* ---- Card ---- */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   width: 100%;
   max-width: 540px;
   padding: 2rem;
+  box-shadow: var(--shadow);
 }
 
 /* ---- Form ---- */
@@ -170,20 +160,23 @@ main {
 .input-wrap input {
   width: 100%;
   background: var(--bg);
-  border: 1px solid var(--border2);
-  border-radius: 8px;
-  padding: 10px 14px;
+  border: 1.5px solid var(--border2);
+  border-radius: 9px;
+  padding: 11px 14px;
   font-family: var(--mono);
   font-size: 16px;
   color: var(--text);
   outline: none;
-  transition: border-color .15s;
+  transition: border-color .15s, box-shadow .15s;
 }
-.input-wrap input:focus { border-color: var(--accent); }
-.input-wrap input.error { border-color: #f87171; }
+.input-wrap input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(5,150,105,.1);
+}
+.input-wrap input.error { border-color: #ef4444; }
 .error-msg {
   font-size: 12px;
-  color: #f87171;
+  color: #ef4444;
   margin-top: 6px;
   min-height: 16px;
   font-family: var(--mono);
@@ -191,34 +184,35 @@ main {
 
 .btn-generate {
   width: 100%;
-  padding: 12px;
+  padding: 13px;
   background: var(--accent);
-  color: #0d1a12;
+  color: #ffffff;
   font-family: var(--mono);
   font-size: 14px;
   font-weight: 500;
   letter-spacing: .04em;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   cursor: pointer;
-  transition: opacity .15s, transform .1s;
+  transition: opacity .15s, transform .1s, box-shadow .15s;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 2px 8px rgba(5,150,105,.3);
 }
-.btn-generate:hover { opacity: .88; }
+.btn-generate:hover { opacity: .9; box-shadow: 0 4px 14px rgba(5,150,105,.35); }
 .btn-generate:active { transform: scale(.98); }
-.btn-generate:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+.btn-generate:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
 
 /* ---- Warning ---- */
 .warn-box {
-  background: rgba(234,179,8,.06);
-  border: 1px solid rgba(234,179,8,.25);
-  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 9px;
   padding: 12px 14px;
   font-size: 13px;
-  color: #fcd34d;
+  color: #92400e;
   line-height: 1.6;
   margin-bottom: 1.5rem;
   display: flex;
@@ -232,8 +226,9 @@ main {
 .result-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
+  box-shadow: var(--shadow);
 }
 .result-header {
   display: flex;
@@ -243,8 +238,10 @@ main {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
+  background: #fafbfc;
+  transition: background .12s;
 }
-.result-header:hover { background: rgba(255,255,255,.02); }
+.result-header:hover { background: #f3f7fa; }
 .result-title {
   display: flex;
   align-items: center;
@@ -252,18 +249,19 @@ main {
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 500;
+  color: var(--text);
 }
 .badge {
   font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 2px 9px;
+  border-radius: 5px;
   font-family: var(--mono);
   letter-spacing: .04em;
+  font-weight: 500;
 }
-.badge-win  { background: rgba(34,211,238,.12); color: var(--accent2); border: 1px solid rgba(34,211,238,.2); }
-.badge-vps  { background: rgba(74,222,128,.12); color: var(--accent);  border: 1px solid rgba(74,222,128,.2); }
-.badge-cmd  { background: rgba(167,139,250,.12); color: #c4b5fd;       border: 1px solid rgba(167,139,250,.2); }
-.badge-adm  { background: rgba(100,116,139,.1);  color: var(--muted);  border: 1px solid rgba(100,116,139,.2); }
+.badge-win  { background: #e0f2fe; color: #0369a1; }
+.badge-vps  { background: #d1fae5; color: #047857; }
+.badge-cmd  { background: #ede9fe; color: #6d28d9; }
 .chevron { transition: transform .2s; color: var(--muted); font-size: 12px; }
 .chevron.open { transform: rotate(180deg); }
 
@@ -272,13 +270,13 @@ main {
 
 .code-block {
   position: relative;
-  background: var(--bg);
+  background: #f8fafc;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   padding: 14px 16px;
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.75;
   color: var(--text);
   white-space: pre;
   overflow-x: auto;
@@ -289,7 +287,7 @@ main {
   padding: 3px 10px;
   background: var(--surface);
   border: 1px solid var(--border2);
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
@@ -302,17 +300,18 @@ main {
 .dl-btn {
   margin-top: 12px;
   width: 100%;
-  padding: 9px;
-  background: transparent;
-  border: 1px solid var(--border2);
-  border-radius: 8px;
+  padding: 10px;
+  background: #f0f9ff;
+  border: 1.5px solid #bae6fd;
+  border-radius: 9px;
   color: var(--accent2);
   font-family: var(--mono);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: border-color .15s, background .15s;
 }
-.dl-btn:hover { border-color: var(--accent2); background: rgba(34,211,238,.05); }
+.dl-btn:hover { border-color: var(--accent2); background: #e0f2fe; }
 
 /* ---- Admin detail accordion ---- */
 .detail-toggle {
@@ -320,17 +319,18 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: rgba(100,116,139,.06);
-  border: 1px solid var(--border2);
-  border-radius: 8px;
+  padding: 11px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
   cursor: pointer;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--muted);
-  transition: background .15s, color .15s;
+  transition: background .12s, color .12s;
+  box-shadow: var(--shadow2);
 }
-.detail-toggle:hover { background: rgba(100,116,139,.12); color: var(--text); }
+.detail-toggle:hover { background: #f3f7fa; color: var(--text); }
 .detail-body { display: flex; flex-direction: column; gap: 1.25rem; margin-top: .75rem; }
 
 /* ---- Apply status ---- */
@@ -341,16 +341,16 @@ main {
   font-size: 12px;
   line-height: 1.6;
 }
-.apply-ok  { background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.25); color: var(--accent); }
-.apply-err { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25); color: #f87171; }
+.apply-ok  { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
+.apply-err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
 .apply-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
 .apply-output { white-space: pre-wrap; color: var(--muted); margin-top: 6px; font-size: 11px; }
 
 /* ---- Spinner ---- */
 .spinner {
   width: 16px; height: 16px;
-  border: 2px solid rgba(13,26,18,.4);
-  border-top-color: #0d1a12;
+  border: 2px solid rgba(255,255,255,.35);
+  border-top-color: #fff;
   border-radius: 50%;
   animation: spin .7s linear infinite;
 }
@@ -359,14 +359,15 @@ main {
 /* ---- Footer ---- */
 footer {
   text-align: center;
-  padding: 1.5rem;
+  padding: 1.25rem;
   font-size: 12px;
   color: var(--muted);
   border-top: 1px solid var(--border);
   font-family: var(--mono);
+  background: var(--surface);
 }
 footer a { color: var(--muted); text-decoration: none; }
-footer a:hover { color: var(--text); }
+footer a:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -374,11 +375,11 @@ footer a:hover { color: var(--text); }
 <header>
   <div class="logo-mark">
     <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="8" cy="4" r="2" stroke="#4ade80" stroke-width="1.5"/>
-      <circle cx="3" cy="12" r="2" stroke="#4ade80" stroke-width="1.5"/>
-      <circle cx="13" cy="12" r="2" stroke="#4ade80" stroke-width="1.5"/>
-      <line x1="8" y1="6" x2="3" y2="10" stroke="#4ade80" stroke-width="1"/>
-      <line x1="8" y1="6" x2="13" y2="10" stroke="#4ade80" stroke-width="1"/>
+      <circle cx="8" cy="4" r="2" stroke="#059669" stroke-width="1.5"/>
+      <circle cx="3" cy="12" r="2" stroke="#059669" stroke-width="1.5"/>
+      <circle cx="13" cy="12" r="2" stroke="#059669" stroke-width="1.5"/>
+      <line x1="8" y1="6" x2="3" y2="10" stroke="#059669" stroke-width="1"/>
+      <line x1="8" y1="6" x2="13" y2="10" stroke="#059669" stroke-width="1"/>
     </svg>
   </div>
   <span class="logo-text">WireGuard <span>Portal</span></span>
@@ -398,7 +399,7 @@ footer a:hover { color: var(--text); }
         <span class="guide-num">1</span>
         <div>
           <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
-          <div class="guide-sub">例: 8080 → 外部から http://[VPSのIP]:8080 でアクセス可能になります</div>
+          <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります</div>
         </div>
       </div>
       <div class="guide-step">
@@ -442,7 +443,7 @@ footer a:hover { color: var(--text); }
       <div class="input-wrap">
         <label>公開ポート番号 (TCP)</label>
         <input type="number" id="port-input" min="1024" max="65535"
-               placeholder="8080" autocomplete="off">
+               placeholder="11090" autocomplete="off">
         <div class="error-msg" id="port-error"></div>
       </div>
     </div>
@@ -570,10 +571,8 @@ async function doGenerate() {
     setText('vps-conf-block', d.server_conf);
     setText('cmd-block',      d.setup_cmds);
 
-    // ダウンロードボタンのファイル名を更新
     document.getElementById('dl-btn').textContent = `↓ wg-client_${d.port}.conf をダウンロード`;
 
-    // 自動適用結果
     const applyEl = document.getElementById('apply-result');
     if (d.applied !== null && d.applied !== undefined) {
       const ok  = d.applied.success;
@@ -584,7 +583,6 @@ async function doGenerate() {
         (out ? `<div class="apply-output">${escHtml(out)}</div>` : '') +
         `</div>`;
       applyEl.style.display = 'block';
-      // 適用結果がある場合は詳細を自動展開
       openDetail();
     } else {
       applyEl.style.display = 'none';
@@ -605,9 +603,7 @@ async function doGenerate() {
 
 function openDetail() {
   const body = document.getElementById('detail-body');
-  if (body.style.display === 'none') {
-    body.style.display = 'flex';
-  }
+  if (body.style.display === 'none') body.style.display = 'flex';
 }
 
 function toggleDetail(btn) {
