@@ -6,23 +6,6 @@ require_once __DIR__ . '/config.php';
 
 class WgManager {
 
-    // ---- IPアドレスのオクテット割り当て -----------------
-    private static function get_client_ip(int $port): string {
-        $db = get_db();
-
-        $row = $db->prepare("SELECT id FROM wg_configs WHERE port = ?");
-        $row->execute([$port]);
-        $existing = $row->fetch();
-
-        if ($existing) {
-            $octet = (($existing['id'] - 1) % 253) + 2;
-        } else {
-            $max   = (int)$db->query("SELECT IFNULL(MAX(id),0) FROM wg_configs")->fetchColumn();
-            $octet = ($max % 253) + 2;
-        }
-        return get_setting('subnet') . '.' . $octet;
-    }
-
     // ---- インターフェース名バリデーション ---------------
     private static function sanitize_interface(string $iface): string {
         if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{0,14}$/', $iface)) {
@@ -221,8 +204,6 @@ class WgManager {
         $subnet    = get_setting('subnet');
         $server_ip = $subnet . '.1';
 
-        $client_ip = self::get_client_ip($port);
-
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
             INSERT INTO wg_configs (port, client_priv, client_pub, server_priv, server_pub, updated_at)
@@ -240,6 +221,13 @@ class WgManager {
             ':sp'   => $server_kp['priv'],
             ':sP'   => $server_kp['pub'],
         ]);
+
+        // UPSERT後に実際のidを取得してIPを算出（削除後の飛び番対策）
+        $stmt = $db->prepare("SELECT id FROM wg_configs WHERE port = ?");
+        $stmt->execute([$port]);
+        $actual_id = (int)$stmt->fetchColumn();
+        $octet     = (($actual_id - 1) % 253) + 2;
+        $client_ip = $subnet . '.' . $octet;
 
         $client_conf = self::build_client_conf(
             $client_kp['priv'], $server_kp['pub'], $client_ip, $server_ip
