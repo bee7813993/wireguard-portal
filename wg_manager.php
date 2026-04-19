@@ -149,6 +149,38 @@ class WgManager {
              . "sudo wg show\n";
     }
 
+    // ---- 残留iptablesルールの全削除 ----------------------
+    private static function flush_stale_iptables(string $iface): void {
+        $subnet = get_setting('subnet');
+
+        // nat PREROUTING: サブネット宛のDNATルールを削除
+        exec('sudo iptables -t nat -S PREROUTING 2>/dev/null', $nat_rules);
+        foreach ($nat_rules as $rule) {
+            if (str_contains($rule, $subnet)) {
+                $del = str_replace('-A PREROUTING', '-D PREROUTING', $rule);
+                exec('sudo iptables -t nat ' . $del . ' 2>/dev/null');
+            }
+        }
+
+        // filter FORWARD: サブネット宛のFORWARDルールを削除
+        exec('sudo iptables -S FORWARD 2>/dev/null', $fwd_rules);
+        foreach ($fwd_rules as $rule) {
+            if (str_contains($rule, $subnet)) {
+                $del = str_replace('-A FORWARD', '-D FORWARD', $rule);
+                exec('sudo iptables ' . $del . ' 2>/dev/null');
+            }
+        }
+
+        // nat POSTROUTING: このインターフェースのMASQUERADEルールを削除
+        exec('sudo iptables -t nat -S POSTROUTING 2>/dev/null', $post_rules);
+        foreach ($post_rules as $rule) {
+            if (str_contains($rule, $iface) && str_contains($rule, 'MASQUERADE')) {
+                $del = str_replace('-A POSTROUTING', '-D POSTROUTING', $rule);
+                exec('sudo iptables -t nat ' . $del . ' 2>/dev/null');
+            }
+        }
+    }
+
     // ---- サーバーへ設定を適用 ----------------------------
     public static function apply_server_config(): array {
         $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
@@ -178,14 +210,16 @@ class WgManager {
 
         if ($running === 0) {
             exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
-            exec('sudo wg-quick up '   . escapeshellarg($iface) . ' 2>&1', $out2, $s2);
-            $output  = implode("\n", array_merge($out1, $out2));
-            $success = ($s2 === 0);
         } else {
-            exec('sudo wg-quick up ' . escapeshellarg($iface) . ' 2>&1', $out, $s);
-            $output  = implode("\n", $out);
-            $success = ($s === 0);
+            $out1 = [];
         }
+
+        // wg-quick down では消えない古い残留iptablesルールを全削除
+        self::flush_stale_iptables($iface);
+
+        exec('sudo wg-quick up ' . escapeshellarg($iface) . ' 2>&1', $out2, $s2);
+        $output  = implode("\n", array_merge($out1, $out2));
+        $success = ($s2 === 0);
 
         if ($success) {
             write_log('INFO', "設定適用完了: {$iface}");
