@@ -60,11 +60,13 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4rem 1.5rem 3rem;
+  padding: 3.5rem 1.5rem 3rem;
+  gap: 2.5rem;
 }
+
+/* ---- Hero ---- */
 .hero {
   text-align: center;
-  margin-bottom: 3rem;
 }
 .hero h1 {
   font-family: var(--mono);
@@ -74,16 +76,73 @@ main {
   line-height: 1.2;
   margin-bottom: .75rem;
 }
-.hero h1 em {
-  font-style: normal;
-  color: var(--accent);
-}
+.hero h1 em { font-style: normal; color: var(--accent); }
 .hero p {
   font-size: 14px;
   color: var(--muted);
   line-height: 1.7;
   max-width: 42ch;
   margin: 0 auto;
+}
+
+/* ---- Guide ---- */
+.guide {
+  width: 100%;
+  max-width: 540px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+.guide-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+.guide-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.guide-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.guide-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: rgba(74,222,128,.12);
+  border: 1px solid rgba(74,222,128,.25);
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.guide-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.guide-text em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent2);
+}
+.guide-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-family: var(--mono);
 }
 
 /* ---- Card ---- */
@@ -94,19 +153,11 @@ main {
   width: 100%;
   max-width: 540px;
   padding: 2rem;
-  margin-bottom: 1.5rem;
 }
 
 /* ---- Form ---- */
-.input-group {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 1rem;
-}
-.input-wrap {
-  flex: 1;
-  position: relative;
-}
+.input-group { display: flex; gap: 10px; margin-bottom: 1rem; }
+.input-wrap { flex: 1; position: relative; }
 .input-wrap label {
   display: block;
   font-size: 11px;
@@ -175,20 +226,7 @@ main {
 }
 .warn-icon { flex-shrink: 0; margin-top: 1px; }
 
-/* ---- Apply status ---- */
-.apply-card {
-  border-radius: 10px;
-  padding: 14px 18px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.apply-ok  { background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.25); color: var(--accent); }
-.apply-err { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25); color: #f87171; }
-.apply-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-.apply-output { white-space: pre-wrap; color: var(--muted); margin-top: 6px; font-size: 11px; }
-
-/* ---- Result panels ---- */
+/* ---- Result area ---- */
 #result-area { width: 100%; max-width: 540px; display: none; flex-direction: column; gap: 1.25rem; }
 
 .result-card {
@@ -225,6 +263,7 @@ main {
 .badge-win  { background: rgba(34,211,238,.12); color: var(--accent2); border: 1px solid rgba(34,211,238,.2); }
 .badge-vps  { background: rgba(74,222,128,.12); color: var(--accent);  border: 1px solid rgba(74,222,128,.2); }
 .badge-cmd  { background: rgba(167,139,250,.12); color: #c4b5fd;       border: 1px solid rgba(167,139,250,.2); }
+.badge-adm  { background: rgba(100,116,139,.1);  color: var(--muted);  border: 1px solid rgba(100,116,139,.2); }
 .chevron { transition: transform .2s; color: var(--muted); font-size: 12px; }
 .chevron.open { transform: rotate(180deg); }
 
@@ -275,31 +314,37 @@ main {
 }
 .dl-btn:hover { border-color: var(--accent2); background: rgba(34,211,238,.05); }
 
-.step-list {
-  margin-top: 12px;
+/* ---- Admin detail accordion ---- */
+.detail-toggle {
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.step {
-  display: flex;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-.step-num {
-  width: 20px; height: 20px;
-  border-radius: 50%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(100,116,139,.06);
   border: 1px solid var(--border2);
-  display: grid;
-  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
-  flex-shrink: 0;
-  margin-top: 1px;
+  transition: background .15s, color .15s;
 }
+.detail-toggle:hover { background: rgba(100,116,139,.12); color: var(--text); }
+.detail-body { display: flex; flex-direction: column; gap: 1.25rem; margin-top: .75rem; }
+
+/* ---- Apply status ---- */
+.apply-card {
+  border-radius: 10px;
+  padding: 14px 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.apply-ok  { background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.25); color: var(--accent); }
+.apply-err { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25); color: #f87171; }
+.apply-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.apply-output { white-space: pre-wrap; color: var(--muted); margin-top: 6px; font-size: 11px; }
 
 /* ---- Spinner ---- */
 .spinner {
@@ -341,10 +386,52 @@ footer a:hover { color: var(--text); }
 
 <main>
   <div class="hero">
-    <h1>トンネルを<em>開通</em>する</h1>
-    <p>公開ポート番号を入力すると、Windows 用 WireGuard 設定と VPS 設定を自動生成します。</p>
+    <h1>ローカルサーバーを<em>外部公開</em></h1>
+    <p>自宅・社内の PC で動いている Web サーバーを VPN 経由でインターネットに安全に公開できます。</p>
   </div>
 
+  <!-- 使い方ガイド -->
+  <div class="guide">
+    <div class="guide-title">使い方</div>
+    <div class="guide-steps">
+      <div class="guide-step">
+        <span class="guide-num">1</span>
+        <div>
+          <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
+          <div class="guide-sub">例: 8080 → 外部から http://[VPSのIP]:8080 でアクセス可能になります</div>
+        </div>
+      </div>
+      <div class="guide-step">
+        <span class="guide-num">2</span>
+        <div>
+          <div class="guide-text">「設定を生成する」をクリックする</div>
+        </div>
+      </div>
+      <div class="guide-step">
+        <span class="guide-num">3</span>
+        <div>
+          <div class="guide-text"><em>wg&#x2011;client_XXXX.conf</em> をダウンロードする</div>
+          <div class="guide-sub">WireGuard for Windows でこのファイルをインポートします</div>
+        </div>
+      </div>
+      <div class="guide-step">
+        <span class="guide-num">4</span>
+        <div>
+          <div class="guide-text">WireGuard でトンネルを <em>有効化</em> する</div>
+          <div class="guide-sub">インポート後、トグルをONにするだけで接続できます</div>
+        </div>
+      </div>
+      <div class="guide-step">
+        <span class="guide-num">5</span>
+        <div>
+          <div class="guide-text">PC のポート <em>80</em> で Web サーバーを起動する</div>
+          <div class="guide-sub">外部からのアクセスはポート80に転送されます</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 生成フォーム -->
   <div class="card">
     <div class="warn-box">
       <span class="warn-icon">⚠</span>
@@ -365,21 +452,10 @@ footer a:hover { color: var(--text); }
     </button>
   </div>
 
+  <!-- 結果エリア -->
   <div id="result-area">
 
-    <div class="step-list" style="width:100%;max-width:540px;margin-bottom:.5rem">
-      <div class="step"><span class="step-num">1</span><span>「Windows クライアント設定」を .conf としてダウンロードし、WireGuard for Windows でインポートする。</span></div>
-      <?php if ($auto_apply): ?>
-      <div class="step"><span class="step-num">2</span><span>VPS サーバー設定は自動適用されます。適用結果を確認してください。</span></div>
-      <div class="step"><span class="step-num">3</span><span>Windows 側でトンネルを有効化する。</span></div>
-      <?php else: ?>
-      <div class="step"><span class="step-num">2</span><span>「VPS サーバー設定」を /etc/wireguard/<?= $wg_iface ?>.conf に保存する。</span></div>
-      <div class="step"><span class="step-num">3</span><span>「セットアップコマンド」を VPS で順番に実行する。</span></div>
-      <div class="step"><span class="step-num">4</span><span>Windows 側でトンネルを有効化する。</span></div>
-      <?php endif; ?>
-    </div>
-
-    <!-- Windows クライアント設定 -->
+    <!-- Windows クライアント設定 (常に表示) -->
     <div class="result-card">
       <div class="result-header" onclick="togglePanel('panel-win', this)">
         <div class="result-title">
@@ -392,43 +468,54 @@ footer a:hover { color: var(--text); }
         <div class="code-block" id="win-conf-block">
           <button class="copy-btn" onclick="copyBlock('win-conf-block')">コピー</button>
         </div>
-        <button class="dl-btn" onclick="downloadConf()">↓ wg-client.conf をダウンロード</button>
+        <button class="dl-btn" id="dl-btn" onclick="downloadConf()">↓ wg-client.conf をダウンロード</button>
       </div>
     </div>
 
-    <!-- 自動適用結果 -->
-    <div id="apply-result" style="display:none"></div>
-
-    <!-- VPS 設定 -->
-    <div class="result-card">
-      <div class="result-header" onclick="togglePanel('panel-vps', this)">
-        <div class="result-title">
-          <span class="badge badge-vps">VPS</span>
-          サーバー設定 (<?= $wg_iface ?>.conf)
-        </div>
+    <!-- 管理者向け詳細 (折りたたみ) -->
+    <div>
+      <button class="detail-toggle" onclick="toggleDetail(this)">
+        <span>詳細・管理者向け情報</span>
         <span class="chevron">▾</span>
-      </div>
-      <div class="result-body" id="panel-vps">
-        <div class="code-block" id="vps-conf-block">
-          <button class="copy-btn" onclick="copyBlock('vps-conf-block')">コピー</button>
-        </div>
-      </div>
-    </div>
+      </button>
+      <div class="detail-body" id="detail-body" style="display:none">
 
-    <!-- セットアップコマンド -->
-    <div class="result-card">
-      <div class="result-header" onclick="togglePanel('panel-cmd', this)">
-        <div class="result-title">
-          <span class="badge badge-cmd">SETUP</span>
-          セットアップコマンド
+        <!-- 自動適用結果 -->
+        <div id="apply-result" style="display:none"></div>
+
+        <!-- VPS 設定 -->
+        <div class="result-card">
+          <div class="result-header" onclick="togglePanel('panel-vps', this)">
+            <div class="result-title">
+              <span class="badge badge-vps">VPS</span>
+              サーバー設定 (<?= $wg_iface ?>.conf)
+            </div>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="result-body" id="panel-vps">
+            <div class="code-block" id="vps-conf-block">
+              <button class="copy-btn" onclick="copyBlock('vps-conf-block')">コピー</button>
+            </div>
+          </div>
         </div>
-        <span class="chevron">▾</span>
-      </div>
-      <div class="result-body" id="panel-cmd">
-        <div class="code-block" id="cmd-block">
-          <button class="copy-btn" onclick="copyBlock('cmd-block')">コピー</button>
+
+        <!-- セットアップコマンド -->
+        <div class="result-card">
+          <div class="result-header" onclick="togglePanel('panel-cmd', this)">
+            <div class="result-title">
+              <span class="badge badge-cmd">SETUP</span>
+              セットアップコマンド
+            </div>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="result-body" id="panel-cmd">
+            <div class="code-block" id="cmd-block">
+              <button class="copy-btn" onclick="copyBlock('cmd-block')">コピー</button>
+            </div>
+          </div>
         </div>
-      </div>
+
+      </div><!-- /detail-body -->
     </div>
 
   </div><!-- /result-area -->
@@ -440,6 +527,7 @@ footer a:hover { color: var(--text); }
 
 <script>
 let winConfContent = '';
+let currentPort    = 0;
 
 async function doGenerate() {
   const input = document.getElementById('port-input');
@@ -476,12 +564,16 @@ async function doGenerate() {
 
     const d = json.data;
     winConfContent = d.client_conf;
+    currentPort    = d.port;
 
     setText('win-conf-block', d.client_conf);
     setText('vps-conf-block', d.server_conf);
     setText('cmd-block',      d.setup_cmds);
 
-    // 自動適用結果の表示
+    // ダウンロードボタンのファイル名を更新
+    document.getElementById('dl-btn').textContent = `↓ wg-client_${d.port}.conf をダウンロード`;
+
+    // 自動適用結果
     const applyEl = document.getElementById('apply-result');
     if (d.applied !== null && d.applied !== undefined) {
       const ok  = d.applied.success;
@@ -492,6 +584,8 @@ async function doGenerate() {
         (out ? `<div class="apply-output">${escHtml(out)}</div>` : '') +
         `</div>`;
       applyEl.style.display = 'block';
+      // 適用結果がある場合は詳細を自動展開
+      openDetail();
     } else {
       applyEl.style.display = 'none';
     }
@@ -507,6 +601,21 @@ async function doGenerate() {
     btn.disabled = false;
     label.textContent = '設定を再生成する';
   }
+}
+
+function openDetail() {
+  const body = document.getElementById('detail-body');
+  if (body.style.display === 'none') {
+    body.style.display = 'flex';
+  }
+}
+
+function toggleDetail(btn) {
+  const body    = document.getElementById('detail-body');
+  const chevron = btn.querySelector('.chevron');
+  const isOpen  = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'flex';
+  chevron.classList.toggle('open', !isOpen);
 }
 
 function escHtml(s) {
@@ -536,7 +645,7 @@ function downloadConf() {
   const blob = new Blob([winConfContent], { type: 'text/plain' });
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
-  a.download = 'wg-client.conf';
+  a.download = currentPort ? `wg-client_${currentPort}.conf` : 'wg-client.conf';
   a.click();
 }
 

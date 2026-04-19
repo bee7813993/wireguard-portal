@@ -4,6 +4,7 @@
 //  admin.php  – 管理画面: 内部パラメーター設定
 // =========================================================
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/wg_manager.php';
 session_start();
 
 $error   = '';
@@ -28,8 +29,6 @@ if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
         }
         $error = 'パスワードが正しくありません。';
     }
-
-    // ログインフォームを表示
     ?>
 <html lang="ja">
 <head>
@@ -66,15 +65,32 @@ button:hover{opacity:.85}
 </html>
     <?php exit; }
 
+// ---- ポート削除 ------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_port') {
+    $del_port = (int)($_POST['del_port'] ?? 0);
+    if ($del_port >= 1024 && $del_port <= 65535) {
+        $deleted = get_db()->prepare("DELETE FROM wg_configs WHERE port = ?")->execute([$del_port]);
+        write_log('INFO', "管理者がポート {$del_port} を削除しました");
+        if (get_setting('auto_apply') === '1') {
+            $res = WgManager::apply_server_config();
+            if ($res['success']) {
+                $success = "ポート {$del_port} を削除し、サーバーへ反映しました。";
+            } else {
+                $error = "ポート {$del_port} を削除しましたが、サーバーへの適用に失敗しました: " . $res['output'];
+            }
+        } else {
+            $success = "ポート {$del_port} を削除しました。";
+        }
+    }
+}
+
 // ---- 設定保存 --------------------------------------------
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     $fields = ['vps_ip','wg_port','nic','subnet','wg_interface'];
     foreach ($fields as $f) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
-    // チェックボックスは未チェック時に送信されないため個別処理
     set_setting('auto_apply', isset($_POST['auto_apply']) ? '1' : '0');
-    // パスワード変更
     if (!empty($_POST['new_pass'])) {
         if ($_POST['new_pass'] === ($_POST['new_pass_confirm'] ?? '')) {
             set_setting('admin_pass', password_hash($_POST['new_pass'], PASSWORD_DEFAULT));
@@ -84,6 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     if (!$error) $success = $success ?: '設定を保存しました。';
+    write_log('INFO', '管理者が設定を変更しました');
 }
 
 // ---- 現在値 -----------------------------------------------
@@ -98,6 +115,14 @@ $cfg = [
 
 // ---- 発行済みポート一覧 -----------------------------------
 $rows = get_db()->query("SELECT port, client_pub, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+
+// ---- ログ読み込み ----------------------------------------
+$log_path  = dirname(DB_PATH) . '/portal.log';
+$log_lines = [];
+if (file_exists($log_path)) {
+    $all       = file($log_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $log_lines = array_reverse(array_slice($all, -200));
+}
 ?>
 <html lang="ja">
 <head>
@@ -114,7 +139,7 @@ header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;a
 .logo span{color:var(--accent)}
 .logout{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;padding:4px 12px;border:1px solid var(--border2);border-radius:6px}
 .logout:hover{color:var(--text);border-color:var(--muted)}
-main{max-width:780px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direction:column;gap:2rem}
+main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direction:column;gap:2rem}
 h2{font-family:var(--mono);font-size:14px;font-weight:500;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:1.25rem}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.75rem}
 .field{margin-bottom:1rem}
@@ -130,10 +155,17 @@ input:focus{border-color:var(--accent)}
 .msg-err{font-size:13px;color:var(--err);font-family:var(--mono);margin-bottom:1rem}
 table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
 th{text-align:left;padding:8px 10px;color:var(--muted);font-weight:400;border-bottom:1px solid var(--border);letter-spacing:.04em}
-td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all}
+td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 .port-badge{display:inline-block;padding:2px 10px;background:rgba(74,222,128,.1);color:var(--accent);border:1px solid rgba(74,222,128,.2);border-radius:4px;font-size:11px}
 .no-rows{text-align:center;padding:1.5rem;color:var(--muted);font-family:var(--mono);font-size:13px}
+.del-btn{padding:3px 12px;background:transparent;border:1px solid rgba(248,113,113,.3);border-radius:4px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap}
+.del-btn:hover{background:rgba(248,113,113,.1);border-color:var(--err)}
+.log-area{max-height:360px;overflow-y:auto;padding:1rem;background:var(--bg);font-family:var(--mono);font-size:11px;line-height:1.7}
+.log-line{color:var(--muted);white-space:pre-wrap;word-break:break-all}
+.log-line.info{color:var(--text)}
+.log-line.error{color:var(--err)}
+.no-log{text-align:center;padding:1.5rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 </style>
 </head>
 <body>
@@ -215,6 +247,7 @@ tr:last-child td{border-bottom:none}
             <th>ポート</th>
             <th>クライアント公開鍵</th>
             <th>最終更新</th>
+            <th style="width:70px"></th>
           </tr>
         </thead>
         <tbody>
@@ -223,10 +256,38 @@ tr:last-child td{border-bottom:none}
             <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
             <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
             <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
+            <td>
+              <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を削除しますか？\nこの操作は元に戻せません。')">
+                <input type="hidden" name="action" value="delete_port">
+                <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
+                <button type="submit" class="del-btn">削除</button>
+              </form>
+            </td>
           </tr>
           <?php endforeach; ?>
         </tbody>
       </table>
+      <?php endif; ?>
+    </div>
+  </div>
+
+  <!-- ログ -->
+  <div>
+    <h2>アクティビティログ</h2>
+    <div class="card" style="padding:0;overflow:hidden">
+      <?php if (empty($log_lines)): ?>
+        <p class="no-log">ログがありません</p>
+      <?php else: ?>
+        <div class="log-area">
+          <?php foreach ($log_lines as $line): ?>
+            <?php
+              $cls = 'log-line';
+              if (str_contains($line, '[INFO]'))  $cls .= ' info';
+              if (str_contains($line, '[ERROR]')) $cls .= ' error';
+            ?>
+            <div class="<?= $cls ?>"><?= htmlspecialchars($line) ?></div>
+          <?php endforeach; ?>
+        </div>
       <?php endif; ?>
     </div>
   </div>

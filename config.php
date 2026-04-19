@@ -76,6 +76,13 @@ function require_admin(): void {
     }
 }
 
+// ---- ログ記録 ------------------------------------------
+function write_log(string $level, string $message): void {
+    $log_path = dirname(DB_PATH) . '/portal.log';
+    $line = date('Y-m-d H:i:s') . " [{$level}] " . $message . PHP_EOL;
+    file_put_contents($log_path, $line, FILE_APPEND | LOCK_EX);
+}
+
 // ---- グローバルサーバー鍵 (インターフェース用・初回生成) ----
 function get_or_create_server_keypair(): array {
     $priv = get_setting('server_priv');

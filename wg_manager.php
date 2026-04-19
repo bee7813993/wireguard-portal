@@ -204,6 +204,12 @@ class WgManager {
             $success = ($s === 0);
         }
 
+        if ($success) {
+            write_log('INFO', "設定適用完了: {$iface}");
+        } else {
+            write_log('ERROR', "設定適用失敗: {$iface} - " . trim($output));
+        }
+
         return ['success' => $success, 'output' => trim($output)];
     }
 
@@ -242,9 +248,16 @@ class WgManager {
         $server_conf = self::build_full_server_conf();
         $setup_cmds  = self::build_setup_commands($port);
 
+        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip})");
+
         $applied = null;
         if (get_setting('auto_apply') === '1') {
             $applied = self::apply_server_config();
+            if ($applied['success']) {
+                write_log('INFO', "ポート {$port} 自動適用完了");
+            } else {
+                write_log('ERROR', "ポート {$port} 自動適用失敗: " . $applied['output']);
+            }
         }
 
         return [
