@@ -583,7 +583,6 @@ async function doGenerate() {
         (out ? `<div class="apply-output">${escHtml(out)}</div>` : '') +
         `</div>`;
       applyEl.style.display = 'block';
-      openDetail();
     } else {
       applyEl.style.display = 'none';
     }
