@@ -10,14 +10,14 @@ class WgManager {
     private static function get_client_ip(int $port): string {
         $db = get_db();
 
-        $row = $db->prepare("SELECT rowid FROM wg_configs WHERE port = ?");
+        $row = $db->prepare("SELECT id FROM wg_configs WHERE port = ?");
         $row->execute([$port]);
         $existing = $row->fetch();
 
         if ($existing) {
-            $octet = (($existing['rowid'] - 1) % 253) + 2;
+            $octet = (($existing['id'] - 1) % 253) + 2;
         } else {
-            $max   = (int)$db->query("SELECT IFNULL(MAX(rowid),0) FROM wg_configs")->fetchColumn();
+            $max   = (int)$db->query("SELECT IFNULL(MAX(id),0) FROM wg_configs")->fetchColumn();
             $octet = ($max % 253) + 2;
         }
         return get_setting('subnet') . '.' . $octet;
@@ -63,7 +63,7 @@ class WgManager {
         $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
 
         $db   = get_db();
-        $rows = $db->query("SELECT rowid, port, client_pub FROM wg_configs ORDER BY rowid ASC")->fetchAll();
+        $rows = $db->query("SELECT id, port, client_pub FROM wg_configs ORDER BY id ASC")->fetchAll();
 
         // MASQUERADE は一度だけ
         $up_lines   = ["iptables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE"];
@@ -71,7 +71,7 @@ class WgManager {
 
         $peer_blocks = '';
         foreach ($rows as $row) {
-            $octet     = (($row['rowid'] - 1) % 253) + 2;
+            $octet     = (($row['id'] - 1) % 253) + 2;
             $client_ip = $subnet . '.' . $octet;
             $port      = (int)$row['port'];
 
