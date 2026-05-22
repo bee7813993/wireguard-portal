@@ -169,6 +169,10 @@ wireguard-portal/
 
 VPS 設定・WireGuard パラメーターを変更できます。変更は次回の設定生成から反映されます。
 
+### WireGuard 制御
+
+**「WireGuard 停止 & iptables クリア」ボタン**で、WireGuard インターフェースを停止し、設定されたすべての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除できます。使用をやめる場合や、iptables ルールが残留している場合に使用してください。
+
 ### 発行済みポート一覧
 
 発行されたポートの一覧と削除ができます。ポートを削除すると、自動適用が有効な場合は WireGuard 設定が即座に更新されます。

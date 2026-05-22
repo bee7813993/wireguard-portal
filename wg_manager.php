@@ -149,6 +149,27 @@ class WgManager {
              . "sudo wg show\n";
     }
 
+    // ---- WireGuard停止 & iptables全削除 -----------------
+    public static function teardown(): array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+
+        exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
+
+        $out1 = [];
+        if ($running === 0) {
+            // wg-quick down がPostDownを実行してiptablesを削除する
+            exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
+        }
+
+        // wg-quick downで消えなかった残留ルールを確実に削除
+        self::flush_stale_iptables($iface);
+
+        $output = trim(implode("\n", $out1));
+        write_log('INFO', "WireGuard停止 & iptablesクリア完了: {$iface}");
+
+        return ['success' => true, 'output' => $output ?: "iptablesルールをクリアしました。"];
+    }
+
     // ---- 残留iptablesルールの全削除 ----------------------
     private static function flush_stale_iptables(string $iface): void {
         $subnet = get_setting('subnet');

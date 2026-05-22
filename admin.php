@@ -68,6 +68,17 @@ button:hover{opacity:.9}
 </html>
     <?php exit; }
 
+// ---- WireGuard停止 & iptablesクリア ---------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'teardown') {
+    $res = WgManager::teardown();
+    if ($res['success']) {
+        $success = 'WireGuardを停止し、iptablesルールをクリアしました。';
+    } else {
+        $error = 'WireGuard停止に失敗しました: ' . $res['output'];
+    }
+    write_log('INFO', '管理者がWireGuardを停止しiptablesをクリアしました');
+}
+
 // ---- ポート削除 ------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_port') {
     $del_port = (int)($_POST['del_port'] ?? 0);
@@ -173,6 +184,8 @@ tr:hover td{background:#fafbfc}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
 .del-btn:hover{background:#fef2f2;border-color:var(--err)}
+.stop-btn{padding:10px 24px;background:transparent;border:1.5px solid #fca5a5;border-radius:9px;color:var(--err);font-family:var(--mono);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s,border-color .12s}
+.stop-btn:hover{background:#fef2f2;border-color:var(--err)}
 .log-area{max-height:360px;overflow-y:auto;padding:1rem;background:#f8fafc;font-family:var(--mono);font-size:11px;line-height:1.75;border-radius:0 0 14px 14px}
 .log-line{color:var(--muted);white-space:pre-wrap;word-break:break-all}
 .log-line.info{color:var(--text)}
@@ -245,6 +258,21 @@ tr:hover td{background:#fafbfc}
 
         <div class="divider"></div>
         <button type="submit" class="save-btn">保存する</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- WireGuard制御 -->
+  <div>
+    <div class="section-title">WireGuard 制御</div>
+    <div class="card">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:1.25rem;line-height:1.7">
+        WireGuardインターフェースを停止し、設定された全ての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除します。<br>
+        使用をやめる場合や、iptables のルールが残留している場合はこのボタンを押してください。
+      </p>
+      <form method="post" onsubmit="return confirm('WireGuardを停止し、iptablesルールをすべて削除します。よろしいですか？')">
+        <input type="hidden" name="action" value="teardown">
+        <button type="submit" class="stop-btn">WireGuard 停止 &amp; iptables クリア</button>
       </form>
     </div>
   </div>
