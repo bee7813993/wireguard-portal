@@ -68,6 +68,17 @@ button:hover{opacity:.9}
 </html>
     <?php exit; }
 
+// ---- WireGuard停止 & iptablesクリア ---------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'teardown') {
+    $res = WgManager::teardown();
+    if ($res['success']) {
+        $success = 'WireGuardを停止し、iptablesルールをクリアしました。';
+    } else {
+        $error = 'WireGuard停止に失敗しました: ' . $res['output'];
+    }
+    write_log('INFO', '管理者がWireGuardを停止しiptablesをクリアしました');
+}
+
 // ---- ポート削除 ------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_port') {
     $del_port = (int)($_POST['del_port'] ?? 0);
@@ -94,6 +105,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
     set_setting('auto_apply', isset($_POST['auto_apply']) ? '1' : '0');
+    $allowed_modes = ['none', 'token', 'admin'];
+    $new_mode = $_POST['delete_mode'] ?? 'none';
+    set_setting('delete_mode', in_array($new_mode, $allowed_modes, true) ? $new_mode : 'none');
     if (!empty($_POST['new_pass'])) {
         if ($_POST['new_pass'] === ($_POST['new_pass_confirm'] ?? '')) {
             set_setting('admin_pass', password_hash($_POST['new_pass'], PASSWORD_DEFAULT));
@@ -114,6 +128,7 @@ $cfg = [
     'subnet'       => get_setting('subnet'),
     'wg_interface' => get_setting('wg_interface') ?: 'wg0',
     'auto_apply'   => get_setting('auto_apply'),
+    'delete_mode'  => get_setting('delete_mode') ?: 'none',
 ];
 
 // ---- 発行済みポート一覧 -----------------------------------
@@ -157,8 +172,8 @@ main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direc
 .field:last-of-type{margin-bottom:0}
 label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px}
 .desc{font-size:12px;color:var(--muted);margin-bottom:7px}
-input[type=text],input[type=number],input[type=password]{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
+input[type=text],input[type=number],input[type=password],select{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;appearance:none}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
 .divider{border:none;border-top:1px solid var(--border);margin:1.5rem 0}
 .save-btn{padding:10px 28px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.25)}
 .save-btn:hover{opacity:.9}
@@ -173,6 +188,8 @@ tr:hover td{background:#fafbfc}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
 .del-btn:hover{background:#fef2f2;border-color:var(--err)}
+.stop-btn{padding:10px 24px;background:transparent;border:1.5px solid #fca5a5;border-radius:9px;color:var(--err);font-family:var(--mono);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s,border-color .12s}
+.stop-btn:hover{background:#fef2f2;border-color:var(--err)}
 .log-area{max-height:360px;overflow-y:auto;padding:1rem;background:#f8fafc;font-family:var(--mono);font-size:11px;line-height:1.75;border-radius:0 0 14px 14px}
 .log-line{color:var(--muted);white-space:pre-wrap;word-break:break-all}
 .log-line.info{color:var(--text)}
@@ -231,6 +248,19 @@ tr:hover td{background:#fafbfc}
             自動適用を有効にする
           </label>
         </div>
+        <div class="field">
+          <label>ユーザー削除モード</label>
+          <div class="desc">
+            <b>none</b>: ポート番号のみで削除可（認証なし）<br>
+            <b>token</b>: 設定生成時に発行されるトークンが必要<br>
+            <b>admin</b>: 管理者のみ削除可（一般ユーザーの削除UIを非表示）
+          </div>
+          <select name="delete_mode" style="margin-top:6px">
+            <option value="none"  <?= $cfg['delete_mode'] === 'none'  ? 'selected' : '' ?>>none — ポート番号のみ（認証なし）</option>
+            <option value="token" <?= $cfg['delete_mode'] === 'token' ? 'selected' : '' ?>>token — ポート番号 + 削除トークン</option>
+            <option value="admin" <?= $cfg['delete_mode'] === 'admin' ? 'selected' : '' ?>>admin — 管理者のみ</option>
+          </select>
+        </div>
 
         <div class="divider"></div>
         <div class="section-title" style="margin-bottom:1rem">パスワード変更 (省略可)</div>
@@ -245,6 +275,21 @@ tr:hover td{background:#fafbfc}
 
         <div class="divider"></div>
         <button type="submit" class="save-btn">保存する</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- WireGuard制御 -->
+  <div>
+    <div class="section-title">WireGuard 制御</div>
+    <div class="card">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:1.25rem;line-height:1.7">
+        WireGuardインターフェースを停止し、設定された全ての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除します。<br>
+        使用をやめる場合や、iptables のルールが残留している場合はこのボタンを押してください。
+      </p>
+      <form method="post" onsubmit="return confirm('WireGuardを停止し、iptablesルールをすべて削除します。よろしいですか？')">
+        <input type="hidden" name="action" value="teardown">
+        <button type="submit" class="stop-btn">WireGuard 停止 &amp; iptables クリア</button>
       </form>
     </div>
   </div>
