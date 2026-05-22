@@ -313,6 +313,26 @@ main {
 }
 .dl-btn:hover { border-color: var(--accent2); background: #e0f2fe; }
 
+/* ---- Delete section ---- */
+.btn-delete {
+  width: 100%;
+  padding: 13px;
+  background: transparent;
+  color: #dc2626;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  border: 1.5px solid #fca5a5;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.btn-delete:hover { background: #fef2f2; border-color: #dc2626; }
+.btn-delete:disabled { opacity: .4; cursor: not-allowed; }
+.del-ok  { background: #f0fdf4; border: 1px solid #86efac; color: #166534; border-radius: 9px; padding: 12px 14px; font-family: var(--mono); font-size: 13px; margin-top: 1rem; }
+.del-err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; border-radius: 9px; padding: 12px 14px; font-family: var(--mono); font-size: 13px; margin-top: 1rem; }
+
 /* ---- Admin detail accordion ---- */
 .detail-toggle {
   width: 100%;
@@ -520,6 +540,29 @@ footer a:hover { color: var(--accent); }
     </div>
 
   </div><!-- /result-area -->
+
+  <!-- 設定削除フォーム -->
+  <div class="card">
+    <div class="warn-box">
+      <span class="warn-icon">⚠</span>
+      <span>登録したポート番号を入力すると、その設定を削除できます。<strong>この操作は元に戻せません。</strong></span>
+    </div>
+
+    <div class="input-group">
+      <div class="input-wrap">
+        <label>削除するポート番号</label>
+        <input type="number" id="del-port-input" min="1024" max="65535"
+               placeholder="11090" autocomplete="off">
+        <div class="error-msg" id="del-port-error"></div>
+      </div>
+    </div>
+
+    <button class="btn-delete" id="del-btn" onclick="doDelete()">
+      <span id="del-btn-label">設定を削除する</span>
+    </button>
+    <div id="del-result"></div>
+  </div>
+
 </main>
 
 <footer>
@@ -653,6 +696,56 @@ function togglePanel(panelId, header) {
 
 document.getElementById('port-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doGenerate();
+});
+
+async function doDelete() {
+  const input   = document.getElementById('del-port-input');
+  const errEl   = document.getElementById('del-port-error');
+  const resultEl = document.getElementById('del-result');
+  const btn     = document.getElementById('del-btn');
+  const label   = document.getElementById('del-btn-label');
+  const port    = parseInt(input.value, 10);
+
+  errEl.textContent = '';
+  resultEl.innerHTML = '';
+  input.classList.remove('error');
+
+  if (!input.value || isNaN(port) || port < 1024 || port > 65535) {
+    errEl.textContent = '1024〜65535 の範囲で入力してください。';
+    input.classList.add('error');
+    return;
+  }
+
+  if (!confirm(`ポート ${port} の設定を削除しますか？\nこの操作は元に戻せません。`)) return;
+
+  btn.disabled = true;
+  label.innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const res  = await fetch('delete.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port })
+    });
+    const json = await res.json();
+
+    if (!res.ok || !json.ok) {
+      resultEl.innerHTML = `<div class="del-err">${escHtml(json.error || 'エラーが発生しました。')}</div>`;
+      return;
+    }
+
+    resultEl.innerHTML = `<div class="del-ok">ポート ${json.port} の設定を削除しました。</div>`;
+    input.value = '';
+  } catch(e) {
+    resultEl.innerHTML = `<div class="del-err">ネットワークエラーが発生しました。</div>`;
+  } finally {
+    btn.disabled = false;
+    label.textContent = '設定を削除する';
+  }
+}
+
+document.getElementById('del-port-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doDelete();
 });
 </script>
 </body>
