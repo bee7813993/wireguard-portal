@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <?php
 require_once __DIR__ . '/config.php';
-$wg_iface   = htmlspecialchars(get_setting('wg_interface') ?: 'wg0');
-$auto_apply = get_setting('auto_apply') === '1';
+$wg_iface    = htmlspecialchars(get_setting('wg_interface') ?: 'wg0');
+$auto_apply  = get_setting('auto_apply') === '1';
+$delete_mode = get_setting('delete_mode') ?: 'none';
 ?>
 <html lang="ja">
 <head>
@@ -493,6 +494,25 @@ footer a:hover { color: var(--accent); }
       </div>
     </div>
 
+    <!-- 削除トークン (token モードのみ) -->
+    <?php if ($delete_mode === 'token'): ?>
+    <div id="token-notice" class="result-card" style="display:none">
+      <div class="result-header" style="cursor:default;background:#fffbeb;border-color:#fde68a">
+        <div class="result-title" style="color:#92400e">
+          <span class="badge" style="background:#fef3c7;color:#92400e">TOKEN</span>
+          削除トークン（この画面を閉じると二度と表示されません）
+        </div>
+      </div>
+      <div class="result-body open" style="display:block">
+        <div class="code-block" id="token-value" style="word-break:break-all;user-select:all"></div>
+        <p style="font-size:12px;color:#92400e;margin-top:10px;line-height:1.7">
+          設定を削除するときに必要です。安全な場所に保存してください。<br>
+          同じポートで再生成すると新しいトークンに更新されます。
+        </p>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <!-- 管理者向け詳細 (折りたたみ) -->
     <div>
       <button class="detail-toggle" onclick="toggleDetail(this)">
@@ -541,7 +561,8 @@ footer a:hover { color: var(--accent); }
 
   </div><!-- /result-area -->
 
-  <!-- 設定削除フォーム -->
+  <!-- 設定削除フォーム (admin モードは非表示) -->
+  <?php if ($delete_mode !== 'admin'): ?>
   <div class="card">
     <div class="warn-box">
       <span class="warn-icon">⚠</span>
@@ -557,11 +578,22 @@ footer a:hover { color: var(--accent); }
       </div>
     </div>
 
+    <?php if ($delete_mode === 'token'): ?>
+    <div class="input-group">
+      <div class="input-wrap">
+        <label>削除トークン</label>
+        <input type="text" id="del-token-input" placeholder="設定生成時に表示されたトークン" autocomplete="off">
+        <div class="error-msg" id="del-token-error"></div>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <button class="btn-delete" id="del-btn" onclick="doDelete()">
       <span id="del-btn-label">設定を削除する</span>
     </button>
     <div id="del-result"></div>
   </div>
+  <?php endif; ?>
 
 </main>
 
@@ -570,6 +602,8 @@ footer a:hover { color: var(--accent); }
 </footer>
 
 <script>
+const DELETE_MODE = <?= json_encode($delete_mode) ?>;
+
 let winConfContent = '';
 let currentPort    = 0;
 
@@ -615,6 +649,17 @@ async function doGenerate() {
     setText('cmd-block',      d.setup_cmds);
 
     document.getElementById('dl-btn').textContent = `↓ wg-client_${d.port}.conf をダウンロード`;
+
+    // 削除トークン表示 (token モードのみ)
+    const tokenNotice = document.getElementById('token-notice');
+    if (tokenNotice) {
+      if (d.delete_token) {
+        document.getElementById('token-value').textContent = d.delete_token;
+        tokenNotice.style.display = 'block';
+      } else {
+        tokenNotice.style.display = 'none';
+      }
+    }
 
     const applyEl = document.getElementById('apply-result');
     if (d.applied !== null && d.applied !== undefined) {
@@ -699,12 +744,12 @@ document.getElementById('port-input').addEventListener('keydown', e => {
 });
 
 async function doDelete() {
-  const input   = document.getElementById('del-port-input');
-  const errEl   = document.getElementById('del-port-error');
+  const input    = document.getElementById('del-port-input');
+  const errEl    = document.getElementById('del-port-error');
   const resultEl = document.getElementById('del-result');
-  const btn     = document.getElementById('del-btn');
-  const label   = document.getElementById('del-btn-label');
-  const port    = parseInt(input.value, 10);
+  const btn      = document.getElementById('del-btn');
+  const label    = document.getElementById('del-btn-label');
+  const port     = parseInt(input.value, 10);
 
   errEl.textContent = '';
   resultEl.innerHTML = '';
@@ -716,6 +761,19 @@ async function doDelete() {
     return;
   }
 
+  // token モードのときトークン入力を検証
+  let token = '';
+  if (DELETE_MODE === 'token') {
+    const tokenInput = document.getElementById('del-token-input');
+    token = tokenInput ? tokenInput.value.trim() : '';
+    const tokenErrEl = document.getElementById('del-token-error');
+    if (tokenErrEl) tokenErrEl.textContent = '';
+    if (!token) {
+      if (tokenErrEl) tokenErrEl.textContent = '削除トークンを入力してください。';
+      return;
+    }
+  }
+
   if (!confirm(`ポート ${port} の設定を削除しますか？\nこの操作は元に戻せません。`)) return;
 
   btn.disabled = true;
@@ -725,7 +783,7 @@ async function doDelete() {
     const res  = await fetch('delete.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port })
+      body: JSON.stringify({ port, token })
     });
     const json = await res.json();
 
@@ -736,6 +794,8 @@ async function doDelete() {
 
     resultEl.innerHTML = `<div class="del-ok">ポート ${json.port} の設定を削除しました。</div>`;
     input.value = '';
+    const tokenInput = document.getElementById('del-token-input');
+    if (tokenInput) tokenInput.value = '';
   } catch(e) {
     resultEl.innerHTML = `<div class="del-err">ネットワークエラーが発生しました。</div>`;
   } finally {

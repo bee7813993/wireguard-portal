@@ -253,28 +253,39 @@ class WgManager {
 
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
     public static function issue(int $port): array {
-        $db        = get_db();
-        $server_kp = get_or_create_server_keypair();
-        $client_kp = wg_generate_keypair();
-        $subnet    = get_setting('subnet');
-        $server_ip = $subnet . '.1';
+        $db          = get_db();
+        $server_kp   = get_or_create_server_keypair();
+        $client_kp   = wg_generate_keypair();
+        $subnet      = get_setting('subnet');
+        $server_ip   = $subnet . '.1';
+        $delete_mode = get_setting('delete_mode') ?: 'none';
+
+        // delete_mode=token のとき削除トークンを生成
+        $plaintext_token = null;
+        $hashed_token    = null;
+        if ($delete_mode === 'token') {
+            $plaintext_token = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
+            $hashed_token    = password_hash($plaintext_token, PASSWORD_DEFAULT);
+        }
 
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
-            INSERT INTO wg_configs (port, client_priv, client_pub, server_priv, server_pub, updated_at)
-            VALUES (:port, :cp, :cP, :sp, :sP, CURRENT_TIMESTAMP)
+            INSERT INTO wg_configs (port, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
+            VALUES (:port, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
             ON CONFLICT(port) DO UPDATE SET
-                client_priv = excluded.client_priv,
-                client_pub  = excluded.client_pub,
-                server_priv = excluded.server_priv,
-                server_pub  = excluded.server_pub,
-                updated_at  = CURRENT_TIMESTAMP
+                client_priv  = excluded.client_priv,
+                client_pub   = excluded.client_pub,
+                server_priv  = excluded.server_priv,
+                server_pub   = excluded.server_pub,
+                delete_token = excluded.delete_token,
+                updated_at   = CURRENT_TIMESTAMP
         ")->execute([
             ':port' => $port,
             ':cp'   => $client_kp['priv'],
             ':cP'   => $client_kp['pub'],
             ':sp'   => $server_kp['priv'],
             ':sP'   => $server_kp['pub'],
+            ':dt'   => $hashed_token,
         ]);
 
         // UPSERT後に実際のidを取得してIPを算出（削除後の飛び番対策）
@@ -304,12 +315,13 @@ class WgManager {
         }
 
         return [
-            'port'        => $port,
-            'client_ip'   => $client_ip,
-            'client_conf' => $client_conf,
-            'server_conf' => $server_conf,
-            'setup_cmds'  => $setup_cmds,
-            'applied'     => $applied,
+            'port'         => $port,
+            'client_ip'    => $client_ip,
+            'client_conf'  => $client_conf,
+            'server_conf'  => $server_conf,
+            'setup_cmds'   => $setup_cmds,
+            'applied'      => $applied,
+            'delete_token' => $plaintext_token,
         ];
     }
 }

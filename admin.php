@@ -105,6 +105,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
     set_setting('auto_apply', isset($_POST['auto_apply']) ? '1' : '0');
+    $allowed_modes = ['none', 'token', 'admin'];
+    $new_mode = $_POST['delete_mode'] ?? 'none';
+    set_setting('delete_mode', in_array($new_mode, $allowed_modes, true) ? $new_mode : 'none');
     if (!empty($_POST['new_pass'])) {
         if ($_POST['new_pass'] === ($_POST['new_pass_confirm'] ?? '')) {
             set_setting('admin_pass', password_hash($_POST['new_pass'], PASSWORD_DEFAULT));
@@ -125,6 +128,7 @@ $cfg = [
     'subnet'       => get_setting('subnet'),
     'wg_interface' => get_setting('wg_interface') ?: 'wg0',
     'auto_apply'   => get_setting('auto_apply'),
+    'delete_mode'  => get_setting('delete_mode') ?: 'none',
 ];
 
 // ---- 発行済みポート一覧 -----------------------------------
@@ -168,8 +172,8 @@ main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direc
 .field:last-of-type{margin-bottom:0}
 label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px}
 .desc{font-size:12px;color:var(--muted);margin-bottom:7px}
-input[type=text],input[type=number],input[type=password]{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
+input[type=text],input[type=number],input[type=password],select{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;appearance:none}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
 .divider{border:none;border-top:1px solid var(--border);margin:1.5rem 0}
 .save-btn{padding:10px 28px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.25)}
 .save-btn:hover{opacity:.9}
@@ -243,6 +247,19 @@ tr:hover td{background:#fafbfc}
             <input type="checkbox" name="auto_apply" value="1" <?= $cfg['auto_apply'] === '1' ? 'checked' : '' ?> style="width:16px;height:16px;accent-color:var(--accent)">
             自動適用を有効にする
           </label>
+        </div>
+        <div class="field">
+          <label>ユーザー削除モード</label>
+          <div class="desc">
+            <b>none</b>: ポート番号のみで削除可（認証なし）<br>
+            <b>token</b>: 設定生成時に発行されるトークンが必要<br>
+            <b>admin</b>: 管理者のみ削除可（一般ユーザーの削除UIを非表示）
+          </div>
+          <select name="delete_mode" style="margin-top:6px">
+            <option value="none"  <?= $cfg['delete_mode'] === 'none'  ? 'selected' : '' ?>>none — ポート番号のみ（認証なし）</option>
+            <option value="token" <?= $cfg['delete_mode'] === 'token' ? 'selected' : '' ?>>token — ポート番号 + 削除トークン</option>
+            <option value="admin" <?= $cfg['delete_mode'] === 'admin' ? 'selected' : '' ?>>admin — 管理者のみ</option>
+          </select>
         </div>
 
         <div class="divider"></div>

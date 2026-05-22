@@ -23,20 +23,27 @@ function get_db(): PDO {
     // テーブル初期化
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS wg_configs (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            port        INTEGER NOT NULL UNIQUE,
-            client_priv TEXT    NOT NULL,
-            client_pub  TEXT    NOT NULL,
-            server_priv TEXT    NOT NULL,
-            server_pub  TEXT    NOT NULL,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            port         INTEGER NOT NULL UNIQUE,
+            client_priv  TEXT    NOT NULL,
+            client_pub   TEXT    NOT NULL,
+            server_priv  TEXT    NOT NULL,
+            server_pub   TEXT    NOT NULL,
+            delete_token TEXT    DEFAULT NULL,
+            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
     ");
+
+    // 既存DBへの delete_token カラム追加マイグレーション
+    $cols = array_column($pdo->query("PRAGMA table_info(wg_configs)")->fetchAll(), 'name');
+    if (!in_array('delete_token', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN delete_token TEXT DEFAULT NULL");
+    }
 
     // デフォルト設定を挿入 (初回のみ)
     $defaults = [
@@ -46,6 +53,7 @@ function get_db(): PDO {
         'subnet'       => '10.0.0',
         'wg_interface' => 'wg0',
         'auto_apply'   => '0',
+        'delete_mode'  => 'none',
         'admin_pass'   => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
