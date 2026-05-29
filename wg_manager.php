@@ -336,6 +336,30 @@ class WgManager {
         return ['success' => $success, 'output' => trim($output)];
     }
 
+    // ---- 既存ポートの設定を鍵を変えずに再生成 ------------
+    public static function rebuild_client_conf(int $port): ?array {
+        $db   = get_db();
+        $stmt = $db->prepare("SELECT id, client_priv, client_pub FROM wg_configs WHERE port = ?");
+        $stmt->execute([$port]);
+        $row = $stmt->fetch();
+        if (!$row) return null;
+
+        $server_kp   = get_or_create_server_keypair();
+        $subnet      = get_setting('subnet');
+        $server_ip   = $subnet . '.1';
+        $octet       = (((int)$row['id'] - 1) % 253) + 2;
+        $client_ip   = $subnet . '.' . $octet;
+
+        $client_conf = self::build_client_conf(
+            $row['client_priv'], $server_kp['pub'], $client_ip, $server_ip
+        );
+        return [
+            'port'        => $port,
+            'client_ip'   => $client_ip,
+            'client_conf' => $client_conf,
+        ];
+    }
+
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
     public static function issue(int $port): array {
         $db          = get_db();
