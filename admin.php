@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <?php
 // =========================================================
 //  admin.php  – 管理画面: 内部パラメーター設定
@@ -18,7 +17,7 @@ if (isset($_GET['logout'])) {
     exit;
 }
 
-// ---- ログイン処理 ----------------------------------------
+// ---- ログイン認証必須 ----------------------------------------
 if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
         $stored = get_setting('admin_pass');
@@ -30,6 +29,7 @@ if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
         $error = 'パスワードが正しくありません。';
     }
     ?>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -68,6 +68,34 @@ button:hover{opacity:.9}
 </html>
     <?php exit; }
 
+// ---- クライアント設定を JSON で返す (Ajax) ---------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_client_conf') {
+    header('Content-Type: application/json; charset=utf-8');
+    $port = (int)($_POST['port'] ?? 0);
+    if ($port < 1024 || $port > 65535) {
+        echo json_encode(['error' => '不正なポート番号です。']);
+        exit;
+    }
+    $result = WgManager::rebuild_client_conf($port);
+    if ($result === null) {
+        echo json_encode(['error' => "ポート {$port} は登録されていません。"]);
+        exit;
+    }
+    echo json_encode(['ok' => true, 'data' => $result]);
+    exit;
+}
+
+// ---- WireGuard 設定を IPv6 対応で再適用 ------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'apply_ipv6') {
+    $res = WgManager::apply_server_config();
+    if ($res['success']) {
+        $success = '全ポートを IPv6 対応で再適用しました。クライアントの設定ファイルも更新してください。';
+    } else {
+        $error = 'サーバー設定の適用に失敗しました: ' . $res['output'];
+    }
+    write_log('INFO', '管理者が IPv6 対応で設定を再適用しました');
+}
+
 // ---- WireGuard停止 & iptablesクリア ---------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'teardown') {
     $res = WgManager::teardown();
@@ -100,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 
 // ---- 設定保存 --------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
-    $fields = ['vps_ip','wg_port','nic','subnet','wg_interface'];
+    $fields = ['vps_ip','wg_port','nic','subnet','subnet_ipv6','wg_interface'];
     foreach ($fields as $f) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
@@ -126,6 +154,7 @@ $cfg = [
     'wg_port'      => get_setting('wg_port'),
     'nic'          => get_setting('nic'),
     'subnet'       => get_setting('subnet'),
+    'subnet_ipv6'  => get_setting('subnet_ipv6'),
     'wg_interface' => get_setting('wg_interface') ?: 'wg0',
     'auto_apply'   => get_setting('auto_apply'),
     'delete_mode'  => get_setting('delete_mode') ?: 'none',
@@ -190,6 +219,22 @@ tr:hover td{background:#fafbfc}
 .del-btn:hover{background:#fef2f2;border-color:var(--err)}
 .stop-btn{padding:10px 24px;background:transparent;border:1.5px solid #fca5a5;border-radius:9px;color:var(--err);font-family:var(--mono);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s,border-color .12s}
 .stop-btn:hover{background:#fef2f2;border-color:var(--err)}
+.apply-btn{padding:10px 24px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.25)}
+.apply-btn:hover{opacity:.9}
+.conf-btn{padding:4px 13px;background:transparent;border:1px solid #a5b4fc;border-radius:5px;color:#4338ca;font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
+.conf-btn:hover{background:#ede9fe;border-color:#6366f1}
+.conf-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;place-items:center}
+.conf-modal.open{display:grid}
+.conf-modal-box{background:#fff;border-radius:14px;padding:1.75rem;width:min(640px,92vw);box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto}
+.conf-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.1rem}
+.conf-modal-title{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text)}
+.conf-modal-close{background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:2px 6px;border-radius:5px;transition:color .12s}
+.conf-modal-close:hover{color:var(--text)}
+.conf-code{background:#f8fafc;border:1px solid var(--border);border-radius:9px;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.75;color:var(--text);white-space:pre;overflow-x:auto;margin-bottom:1rem}
+.conf-dl-btn{display:inline-block;padding:8px 18px;background:var(--accent2);color:#fff;font-family:var(--mono);font-size:12px;border:none;border-radius:7px;cursor:pointer;transition:opacity .15s}
+.conf-dl-btn:hover{opacity:.9}
+.conf-copy-btn{display:inline-block;padding:8px 18px;background:transparent;color:var(--accent);border:1px solid var(--accent);font-family:var(--mono);font-size:12px;border-radius:7px;cursor:pointer;transition:background .12s;margin-left:8px}
+.conf-copy-btn:hover{background:#f0fdf4}
 .log-area{max-height:360px;overflow-y:auto;padding:1rem;background:#f8fafc;font-family:var(--mono);font-size:11px;line-height:1.75;border-radius:0 0 14px 14px}
 .log-line{color:var(--muted);white-space:pre-wrap;word-break:break-all}
 .log-line.info{color:var(--text)}
@@ -234,6 +279,11 @@ tr:hover td{background:#fafbfc}
           <label>WireGuard サブネット (先頭3オクテット)</label>
           <div class="desc">例: 10.0.0 → サーバー 10.0.0.1, クライアントは 10.0.0.2〜</div>
           <input type="text" name="subnet" value="<?= htmlspecialchars($cfg['subnet']) ?>" placeholder="10.0.0">
+        </div>
+        <div class="field">
+          <label>WireGuard IPv6 サブネット</label>
+          <div class="desc">例: fd00:: → サーバー fd00::1, クライアントは fd00::2〜 (ULA推奨)</div>
+          <input type="text" name="subnet_ipv6" value="<?= htmlspecialchars($cfg['subnet_ipv6']) ?>" placeholder="fd00::">
         </div>
         <div class="field">
           <label>WireGuard インターフェース名</label>
@@ -282,15 +332,45 @@ tr:hover td{background:#fafbfc}
   <!-- WireGuard制御 -->
   <div>
     <div class="section-title">WireGuard 制御</div>
-    <div class="card">
-      <p style="font-size:13px;color:var(--muted);margin-bottom:1.25rem;line-height:1.7">
-        WireGuardインターフェースを停止し、設定された全ての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除します。<br>
-        使用をやめる場合や、iptables のルールが残留している場合はこのボタンを押してください。
-      </p>
-      <form method="post" onsubmit="return confirm('WireGuardを停止し、iptablesルールをすべて削除します。よろしいですか？')">
-        <input type="hidden" name="action" value="teardown">
-        <button type="submit" class="stop-btn">WireGuard 停止 &amp; iptables クリア</button>
-      </form>
+    <div class="card" style="display:flex;flex-direction:column;gap:1.25rem">
+      <div>
+        <p style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:.4rem">IPv6 対応で再適用</p>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:.9rem;line-height:1.7">
+          既存の全ポートを含む WireGuard 設定を IPv6 ルール付きで書き直し、wg-quick で反映します。<br>
+          適用後、各クライアントはポート一覧の「設定を表示」から新しい .conf を取得してください。
+        </p>
+        <details style="margin-bottom:.9rem;font-size:12px;color:var(--muted)">
+          <summary style="cursor:pointer;font-family:var(--mono);color:var(--accent2)">事前確認: VPS で必要な設定</summary>
+          <div style="margin-top:.6rem;background:#f8fafc;border:1px solid var(--border);border-radius:7px;padding:10px 14px;line-height:2">
+            <code style="display:block;font-family:var(--mono);font-size:11px;white-space:pre"># IPv6 フォワーディング確認 (1 なら OK)
+sysctl net.ipv6.conf.all.forwarding
+# → 0 の場合:
+sudo sysctl -w net.ipv6.conf.all.forwarding=1
+echo 'net.ipv6.conf.all.forwarding=1' | sudo tee -a /etc/sysctl.conf
+
+# ip6table_nat モジュール確認
+lsmod | grep ip6table_nat
+# → 何も出ない場合:
+sudo modprobe ip6table_nat
+echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
+          </div>
+        </details>
+        <form method="post" onsubmit="return confirm('WireGuard設定をIPv6対応で再適用します。よろしいですか？')">
+          <input type="hidden" name="action" value="apply_ipv6">
+          <button type="submit" class="apply-btn">IPv6 対応で全ポートを再適用</button>
+        </form>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:1.25rem">
+        <p style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:.4rem">WireGuard 停止 &amp; iptables クリア</p>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:.9rem;line-height:1.7">
+          WireGuardインターフェースを停止し、設定された全ての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除します。<br>
+          使用をやめる場合や、iptables のルールが残留している場合はこのボタンを押してください。
+        </p>
+        <form method="post" onsubmit="return confirm('WireGuardを停止し、iptablesルールをすべて削除します。よろしいですか？')">
+          <input type="hidden" name="action" value="teardown">
+          <button type="submit" class="stop-btn">WireGuard 停止 &amp; iptables クリア</button>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -307,7 +387,7 @@ tr:hover td{background:#fafbfc}
             <th>ポート</th>
             <th>クライアント公開鍵</th>
             <th>最終更新</th>
-            <th style="width:72px"></th>
+            <th style="width:130px"></th>
           </tr>
         </thead>
         <tbody>
@@ -316,7 +396,8 @@ tr:hover td{background:#fafbfc}
             <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
             <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
             <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
-            <td>
+            <td style="display:flex;gap:6px;align-items:center">
+              <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を削除しますか？\nこの操作は元に戻せません。')">
                 <input type="hidden" name="action" value="delete_port">
                 <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
@@ -353,5 +434,76 @@ tr:hover td{background:#fafbfc}
   </div>
 
 </main>
+
+<!-- クライアント設定モーダル -->
+<div class="conf-modal" id="conf-modal" onclick="if(event.target===this)closeModal()">
+  <div class="conf-modal-box">
+    <div class="conf-modal-header">
+      <span class="conf-modal-title" id="conf-modal-title">クライアント設定</span>
+      <button class="conf-modal-close" onclick="closeModal()">×</button>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:.9rem;line-height:1.6">
+      このファイルを WireGuard クライアントにインポートしてください。<br>
+      既存の設定を <strong>上書き（インポートし直し）</strong> することで IPv6 に対応します。
+    </p>
+    <div class="conf-code" id="conf-modal-code"></div>
+    <button class="conf-dl-btn" id="conf-dl-btn">↓ .conf をダウンロード</button>
+    <button class="conf-copy-btn" id="conf-copy-btn" onclick="copyConf()">コピー</button>
+  </div>
+</div>
+
+<script>
+let _confText = '';
+let _confPort = 0;
+
+async function showClientConf(port) {
+  const modal = document.getElementById('conf-modal');
+  const codeEl = document.getElementById('conf-modal-code');
+  const titleEl = document.getElementById('conf-modal-title');
+  titleEl.textContent = `クライアント設定 — ポート ${port}`;
+  codeEl.textContent = '読み込み中…';
+  modal.classList.add('open');
+
+  const fd = new FormData();
+  fd.append('action', 'get_client_conf');
+  fd.append('port', port);
+  try {
+    const res  = await fetch('admin.php', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.ok) {
+      _confText = json.data.client_conf;
+      _confPort = json.data.port;
+      codeEl.textContent = _confText;
+      document.getElementById('conf-dl-btn').onclick = () => downloadConf();
+    } else {
+      codeEl.textContent = 'エラー: ' + (json.error || '不明なエラー');
+    }
+  } catch (e) {
+    codeEl.textContent = '通信エラー: ' + e.message;
+  }
+}
+
+function closeModal() {
+  document.getElementById('conf-modal').classList.remove('open');
+}
+
+function downloadConf() {
+  const blob = new Blob([_confText], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `wg-client_${_confPort}.conf`;
+  a.click();
+}
+
+function copyConf() {
+  navigator.clipboard.writeText(_confText).then(() => {
+    const btn = document.getElementById('conf-copy-btn');
+    btn.textContent = 'コピーしました！';
+    setTimeout(() => btn.textContent = 'コピー', 1500);
+  });
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+</script>
 </body>
 </html>

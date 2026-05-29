@@ -23,16 +23,23 @@ class WgManager {
     ): string {
         $vps_ip  = get_setting('vps_ip');
         $wg_port = get_setting('wg_port');
+        $subnet_ipv6 = get_setting('subnet_ipv6');
+
+        // IPv6 アドレス生成
+        $ipv4_parts = explode('.', $client_ip);
+        $ipv4_last = (int)end($ipv4_parts);
+        $client_ip6 = $subnet_ipv6 . dechex($ipv4_last);
+        $server_ip6 = $subnet_ipv6 . '1';
 
         return "[Interface]\n"
              . "PrivateKey = {$client_priv}\n"
-             . "Address = {$client_ip}/24\n"
+             . "Address = {$client_ip}/24, {$client_ip6}/64\n"
              . "DNS = 1.1.1.1\n"
              . "\n"
              . "[Peer]\n"
              . "PublicKey = {$server_pub}\n"
              . "Endpoint = {$vps_ip}:{$wg_port}\n"
-             . "AllowedIPs = {$server_ip}/32\n"
+             . "AllowedIPs = {$server_ip}/32, {$server_ip6}/128\n"
              . "PersistentKeepalive = 25\n";
     }
 
@@ -40,7 +47,9 @@ class WgManager {
     public static function build_full_server_conf(): string {
         $server_kp = get_or_create_server_keypair();
         $subnet    = get_setting('subnet');
+        $subnet_ipv6 = get_setting('subnet_ipv6');
         $server_ip = $subnet . '.1';
+        $server_ip6 = $subnet_ipv6 . '1';
         $wg_port   = get_setting('wg_port');
         $nic       = get_setting('nic');
         $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
@@ -48,28 +57,43 @@ class WgManager {
         $db   = get_db();
         $rows = $db->query("SELECT id, port, client_pub FROM wg_configs ORDER BY id ASC")->fetchAll();
 
-        // MASQUERADE は一度だけ
-        $up_lines   = ["iptables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE"];
-        $down_lines = ["iptables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE"];
+        // MASQUERADE は一度だけ (IPv4 & IPv6)
+        $up_lines   = [
+            "iptables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE",
+            "ip6tables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE",
+        ];
+        $down_lines = [
+            "iptables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE",
+            "ip6tables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE",
+        ];
 
         $peer_blocks = '';
         foreach ($rows as $row) {
-            $octet     = (($row['id'] - 1) % 253) + 2;
-            $client_ip = $subnet . '.' . $octet;
-            $port      = (int)$row['port'];
+            $octet      = (($row['id'] - 1) % 253) + 2;
+            $client_ip  = $subnet . '.' . $octet;
+            $client_ip6 = $subnet_ipv6 . dechex($octet);
+            $port       = (int)$row['port'];
 
+            // IPv4 ルール
             $up_lines[]   = "iptables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
             $up_lines[]   = "iptables -A FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
             $down_lines[] = "iptables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
             $down_lines[] = "iptables -D FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
 
+            // IPv6 ルール
+            $up_lines[]   = "ip6tables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination [{$client_ip6}]:80";
+            $up_lines[]   = "ip6tables -A FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT";
+            $down_lines[] = "ip6tables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination [{$client_ip6}]:80";
+            $down_lines[] = "ip6tables -D FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT";
+
+            // WireGuardは両方のアドレスを許可
             $peer_blocks .= "\n[Peer]\n"
                          .  "PublicKey = {$row['client_pub']}\n"
-                         .  "AllowedIPs = {$client_ip}/32\n";
+                         .  "AllowedIPs = {$client_ip}/32, {$client_ip6}/128\n";
         }
 
         $conf = "[Interface]\n"
-              . "Address = {$server_ip}/24\n"
+              . "Address = {$server_ip}/24, {$server_ip6}/64\n"
               . "ListenPort = {$wg_port}\n"
               . "PrivateKey = {$server_kp['priv']}\n"
               . "\n";
@@ -91,25 +115,40 @@ class WgManager {
         $wg_port = get_setting('wg_port');
         $nic     = get_setting('nic');
         $iface   = get_setting('wg_interface') ?: 'wg0';
+        $subnet_ipv6 = get_setting('subnet_ipv6');
+
+        // IPv6 アドレス生成 (IPv4 の最後の八進数から十六進数に変換)
+        $ipv4_parts = explode('.', $client_ip);
+        $ipv4_last = (int)end($ipv4_parts);
+        $client_ip6 = $subnet_ipv6 . dechex($ipv4_last);
+        $server_ip6 = $subnet_ipv6 . '1';
 
         $post_up   = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-A', '-A');
+        $post_up6  = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-A', '-A');
         $post_down = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-D', '-D');
+        $post_down6 = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-D', '-D');
 
         return "[Interface]\n"
-             . "Address = {$server_ip}/24\n"
+             . "Address = {$server_ip}/24, {$server_ip6}/64\n"
              . "ListenPort = {$wg_port}\n"
              . "PrivateKey = {$server_priv}\n"
              . "\n"
              . "PostUp   = {$post_up[0]}\n"
              . "PostUp   = {$post_up[1]}\n"
              . "PostUp   = {$post_up[2]}\n"
+             . "PostUp   = {$post_up6[0]}\n"
+             . "PostUp   = {$post_up6[1]}\n"
+             . "PostUp   = {$post_up6[2]}\n"
              . "PostDown = {$post_down[0]}\n"
              . "PostDown = {$post_down[1]}\n"
              . "PostDown = {$post_down[2]}\n"
+             . "PostDown = {$post_down6[0]}\n"
+             . "PostDown = {$post_down6[1]}\n"
+             . "PostDown = {$post_down6[2]}\n"
              . "\n"
              . "[Peer]\n"
              . "PublicKey = {$client_pub}\n"
-             . "AllowedIPs = {$client_ip}/32\n";
+             . "AllowedIPs = {$client_ip}/32, {$client_ip6}/128\n";
     }
 
     private static function iptables_rules(
@@ -127,26 +166,46 @@ class WgManager {
         ];
     }
 
+    private static function ip6tables_rules(
+        string $nic,
+        string $iface,
+        int    $ext_port,
+        string $client_ip6,
+        string $nat_flag,
+        string $fwd_flag
+    ): array {
+        return [
+            "ip6tables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} -j DNAT --to-destination [{$client_ip6}]:80",
+            "ip6tables {$fwd_flag} FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT",
+            "ip6tables -t nat {$nat_flag} POSTROUTING -o {$iface} -j MASQUERADE",
+        ];
+    }
+
     // ---- セットアップコマンド生成 -------------------------
     public static function build_setup_commands(int $ext_port): string {
         $wg_port = get_setting('wg_port');
         $iface   = get_setting('wg_interface') ?: 'wg0';
 
         return "# 1. WireGuardインストール\n"
-             . "sudo apt update && sudo apt install wireguard -y\n\n"
-             . "# 2. IPフォワーディングを有効化\n"
+             . "sudo apt update && sudo apt install wireguard iptables -y\n\n"
+             . "# 2. IP フォワーディングを有効化 (IPv4 & IPv6)\n"
              . "echo \"net.ipv4.ip_forward=1\" | sudo tee -a /etc/sysctl.conf\n"
+             . "echo \"net.ipv6.conf.all.forwarding=1\" | sudo tee -a /etc/sysctl.conf\n"
              . "sudo sysctl -p\n\n"
-             . "# 3. {$iface}.conf を配置 (上の内容を保存)\n"
+             . "# 3. ip6tables NAT モジュールを有効化 (IPv6 NAT に必要)\n"
+             . "sudo modprobe ip6table_nat\n"
+             . "echo 'ip6table_nat' | sudo tee -a /etc/modules\n\n"
+             . "# 4. {$iface}.conf を配置 (上の内容を保存)\n"
              . "sudo nano /etc/wireguard/{$iface}.conf\n\n"
-             . "# 4. 起動・自動起動\n"
+             . "# 5. 起動・自動起動\n"
              . "sudo wg-quick up {$iface}\n"
              . "sudo systemctl enable wg-quick@{$iface}\n\n"
-             . "# 5. ファイアウォール開放\n"
+             . "# 6. ファイアウォール開放\n"
              . "sudo ufw allow {$wg_port}/udp\n"
              . "sudo ufw allow {$ext_port}/tcp\n\n"
-             . "# 6. 状態確認\n"
-             . "sudo wg show\n";
+             . "# 7. 状態確認\n"
+             . "sudo wg show\n"
+             . "sudo ip6tables -t nat -L -n\n";
     }
 
     // ---- WireGuard停止 & iptables全削除 -----------------
@@ -173,7 +232,9 @@ class WgManager {
     // ---- 残留iptablesルールの全削除 ----------------------
     private static function flush_stale_iptables(string $iface): void {
         $subnet = get_setting('subnet');
+        $subnet_ipv6 = get_setting('subnet_ipv6');
 
+        // IPv4 処理
         // nat PREROUTING: サブネット宛のDNATルールを削除
         exec('sudo iptables -t nat -S PREROUTING 2>/dev/null', $nat_rules);
         foreach ($nat_rules as $rule) {
@@ -198,6 +259,34 @@ class WgManager {
             if (str_contains($rule, $iface) && str_contains($rule, 'MASQUERADE')) {
                 $del = str_replace('-A POSTROUTING', '-D POSTROUTING', $rule);
                 exec('sudo iptables -t nat ' . $del . ' 2>/dev/null');
+            }
+        }
+
+        // IPv6 処理
+        // nat PREROUTING: IPv6 サブネット宛のDNATルールを削除
+        exec('sudo ip6tables -t nat -S PREROUTING 2>/dev/null', $nat_rules6);
+        foreach ($nat_rules6 as $rule) {
+            if (str_contains($rule, $subnet_ipv6)) {
+                $del = str_replace('-A PREROUTING', '-D PREROUTING', $rule);
+                exec('sudo ip6tables -t nat ' . $del . ' 2>/dev/null');
+            }
+        }
+
+        // filter FORWARD: IPv6 サブネット宛のFORWARDルールを削除
+        exec('sudo ip6tables -S FORWARD 2>/dev/null', $fwd_rules6);
+        foreach ($fwd_rules6 as $rule) {
+            if (str_contains($rule, $subnet_ipv6)) {
+                $del = str_replace('-A FORWARD', '-D FORWARD', $rule);
+                exec('sudo ip6tables ' . $del . ' 2>/dev/null');
+            }
+        }
+
+        // nat POSTROUTING: このインターフェースのMASQUERADEルール（IPv6）を削除
+        exec('sudo ip6tables -t nat -S POSTROUTING 2>/dev/null', $post_rules6);
+        foreach ($post_rules6 as $rule) {
+            if (str_contains($rule, $iface) && str_contains($rule, 'MASQUERADE')) {
+                $del = str_replace('-A POSTROUTING', '-D POSTROUTING', $rule);
+                exec('sudo ip6tables -t nat ' . $del . ' 2>/dev/null');
             }
         }
     }
@@ -249,6 +338,30 @@ class WgManager {
         }
 
         return ['success' => $success, 'output' => trim($output)];
+    }
+
+    // ---- 既存ポートの設定を鍵を変えずに再生成 ------------
+    public static function rebuild_client_conf(int $port): ?array {
+        $db   = get_db();
+        $stmt = $db->prepare("SELECT id, client_priv, client_pub FROM wg_configs WHERE port = ?");
+        $stmt->execute([$port]);
+        $row = $stmt->fetch();
+        if (!$row) return null;
+
+        $server_kp   = get_or_create_server_keypair();
+        $subnet      = get_setting('subnet');
+        $server_ip   = $subnet . '.1';
+        $octet       = (((int)$row['id'] - 1) % 253) + 2;
+        $client_ip   = $subnet . '.' . $octet;
+
+        $client_conf = self::build_client_conf(
+            $row['client_priv'], $server_kp['pub'], $client_ip, $server_ip
+        );
+        return [
+            'port'        => $port,
+            'client_ip'   => $client_ip,
+            'client_conf' => $client_conf,
+        ];
     }
 
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----

@@ -51,6 +51,7 @@ function get_db(): PDO {
         'wg_port'      => '51820',
         'nic'          => 'eth0',
         'subnet'       => '10.0.0',
+        'subnet_ipv6'  => 'fd00::',
         'wg_interface' => 'wg0',
         'auto_apply'   => '0',
         'delete_mode'  => 'none',

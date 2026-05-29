@@ -8,18 +8,19 @@
 ## 構成
 
 ```
-[外部ブラウザ]
+[外部ブラウザ] (IPv4 / IPv6)
       ↓ TCP :XXXX
 [VPS (nginx + PHP-FPM)]
-      ↓ WireGuard トンネル (UDP :51821)
-[社内 PC (WireGuard for Windows)]
+      ↓ WireGuard トンネル (UDP :51821, IPv4 + IPv6)
+[社内 PC (WireGuard for Windows/Linux/macOS)]
       ↓ localhost
 [Web サーバー (XAMPP 等) :80]
 ```
 
 - VPS 上の nginx が PHP-FPM で本ポータルを提供
 - 利用者がポート番号を入力 → WireGuard 設定ファイルを生成・自動適用
-- iptables DNAT で外部ポートを WireGuard トンネル内の PC ポート 80 に転送
+- iptables/ip6tables DNAT で外部ポートを WireGuard トンネル内の PC ポート 80 に転送
+- IPv4・IPv6 の両方のトラフィックに対応
 
 ---
 
@@ -31,7 +32,9 @@
 | PHP | 8.1 以上 (php-fpm, php-sqlite3, php-sodium) |
 | Web サーバー | nginx |
 | WireGuard | `wireguard-tools` パッケージ |
-| 権限 | www-data が sudo で wg/iptables を実行できること |
+| iptables/ip6tables | `iptables` パッケージ |
+| IPv6 | Linux カーネルの IPv6 フォワーディング + ip6table_nat モジュール（オプション） |
+| 権限 | www-data が sudo で wg/iptables/ip6tables を実行できること |
 
 ---
 
@@ -41,7 +44,7 @@
 
 ```bash
 sudo apt update
-sudo apt install nginx php8.1-fpm php8.1-sqlite3 php8.1-sodium wireguard-tools -y
+sudo apt install nginx php8.1-fpm php8.1-sqlite3 php8.1-sodium wireguard-tools iptables -y
 ```
 
 ### 2. ファイルの配置
@@ -102,10 +105,22 @@ www-data ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wireguard/*
 www-data ALL=(ALL) NOPASSWD: /bin/chmod 600 /etc/wireguard/*
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -S PREROUTING
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -D PREROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -A PREROUTING *
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -S FORWARD
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -D FORWARD *
+www-data ALL=(ALL) NOPASSWD: /sbin/iptables -A FORWARD *
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -S POSTROUTING
 www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -D POSTROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/iptables -t nat -A POSTROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -S PREROUTING
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -D PREROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -A PREROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -S FORWARD
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -D FORWARD *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -A FORWARD *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -S POSTROUTING
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -D POSTROUTING *
+www-data ALL=(ALL) NOPASSWD: /sbin/ip6tables -t nat -A POSTROUTING *
 ```
 
 ```bash
@@ -113,12 +128,22 @@ sudo chmod 440 /etc/sudoers.d/wireguard-portal
 sudo visudo -c  # 構文チェック
 ```
 
-### 6. IP フォワーディングの有効化
+### 6. IP フォワーディングの有効化（IPv4 & IPv6）
 
 ```bash
 echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+echo "net.ipv6.conf.all.forwarding=1" | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
+
+### 6.5. ip6table_nat モジュールの有効化（IPv6 NAT が必要な場合）
+
+```bash
+sudo modprobe ip6table_nat
+echo "ip6table_nat" | sudo tee -a /etc/modules
+```
+
+> **注：** 既存の WireGuard 設定を IPv6 対応にする場合は、管理画面の「IPv6 対応で全ポートを再適用」ボタンを押す前に、このモジュールのロードを完了してください。
 
 ### 7. ファイアウォールの開放
 
@@ -138,7 +163,8 @@ sudo ufw allow 51821/udp    # WireGuard (wg_port に合わせて変更)
 | VPS グローバル IP | クライアントが接続する VPS の IP またはドメイン |
 | WireGuard ポート (UDP) | VPS の WireGuard 待ち受けポート（デフォルト: `51820`） |
 | 外向き NIC 名 | VPS のネットワークインターフェース名（`ip a` で確認。例: `ens3`, `eth0`） |
-| WireGuard サブネット | VPN 内部ネットワーク（例: `10.100.10`） |
+| WireGuard サブネット | VPN 内部ネットワーク（例: `10.100.10`。先頭3オクテット） |
+| WireGuard IPv6 サブネット | VPN 内部の IPv6 ネットワーク（例: `fd00::`。ULA推奨） |
 | WireGuard インターフェース名 | `wg0` が使用中なら `wg1` や `wg10` など別名を指定 |
 | 設定生成時に自動適用 | 有効にすると生成時に自動で `wg-quick` を適用する |
 | ユーザー削除モード | 一般ユーザーが設定を削除できる方法を選択する（後述） |
@@ -173,11 +199,23 @@ VPS 設定・WireGuard パラメーターを変更できます。変更は次回
 
 ### WireGuard 制御
 
-**「WireGuard 停止 & iptables クリア」ボタン**で、WireGuard インターフェースを停止し、設定されたすべての iptables ルール（DNAT / FORWARD / MASQUERADE）を削除できます。使用をやめる場合や、iptables ルールが残留している場合に使用してください。
+#### 「IPv6 対応で全ポートを再適用」ボタン
+
+既存の全ポートに IPv6 ルール（ip6tables）を追加し、サーバー設定を更新します。新しく生成する設定に IPv6 アドレスを含めたい場合に使用します。
+
+実行前に VPS 側で以下を確認してください：
+- IPv6 フォワーディングが有効：`sudo sysctl net.ipv6.conf.all.forwarding`（1 なら OK）
+- ip6table_nat モジュールがロード：`sudo modprobe ip6table_nat`
+
+#### 「WireGuard 停止 & iptables クリア」ボタン
+
+WireGuard インターフェースを停止し、設定されたすべての iptables・ip6tables ルール（DNAT / FORWARD / MASQUERADE）を削除できます。使用をやめる場合や、iptables ルールが残留している場合に使用してください。
 
 ### 発行済みポート一覧
 
-発行されたポートの一覧と削除ができます。ポートを削除すると、自動適用が有効な場合は WireGuard 設定が即座に更新されます。管理者はモードにかかわらず常に削除できます。
+発行されたポートの一覧と削除ができます。各ポートの「設定を表示」ボタンで、IPv6 対応済みのクライアント設定を確認・ダウンロードできます。
+
+ポートを削除すると、自動適用が有効な場合は WireGuard 設定が即座に更新されます。管理者はモードにかかわらず常に削除できます。
 
 ### アクティビティログ
 
@@ -231,3 +269,42 @@ VPS 設定・WireGuard パラメーターを変更できます。変更は次回
 ## エンドユーザー向けガイド
 
 利用者への案内は `docs/利用ガイド.md` を GitHub Wiki にコピーして使用してください。
+
+---
+
+## 更新履歴
+
+### v1.1.0 (2026-05-29) — IPv6 対応
+
+**新機能**
+- **IPv6 サポート**: IPv4・IPv6 の両方のポート転送に対応
+  - WireGuard に IPv6 アドレス（ULA: `fd00::/64` など）を割り当て可能
+  - iptables と ip6tables を並行実装し、IPv4・IPv6 トラフィックを同時処理
+  - 既存の IPv4 ルールには影響なし
+
+- **管理画面の拡張**:
+  - IPv6 サブネット設定フィールド追加
+  - 「IPv6 対応で全ポートを再適用」ボタン（既存ポートを一括 IPv6 対応化）
+  - ポート一覧に「設定を表示」ボタン（クライアント設定をモーダルで確認）
+  - 事前確認コマンドを折りたたみで表示
+
+- **セットアップ自動化**:
+  - セットアップコマンドに IPv6 フォワーディング・ip6table_nat モジュール設定を追加
+
+**修正**
+- admin.php の JSON レスポンス生成を PHP ブロックの最初に移動（HTML 出力前に JSON を返すよう修正）
+- sudo 権限設定に ip6tables 関連コマンドを追加
+
+**詳細**
+- [IPv6 実装コミット](https://github.com/bee7813993/wireguard-portal/commit/8cab606)
+- [管理画面 UI 追加](https://github.com/bee7813993/wireguard-portal/commit/4142bf5)
+- [セットアップ情報追加](https://github.com/bee7813993/wireguard-portal/commit/db6cc1a)
+
+---
+
+### v1.0.0 (初版)
+
+- WireGuard ポート転送ポータル（IPv4 のみ）
+- 管理画面・ユーザーポータル
+- iptables DNAT / FORWARD / MASQUERADE 自動化
+- SQLite ベースの設定管理
