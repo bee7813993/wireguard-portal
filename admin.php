@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <?php
 // =========================================================
 //  admin.php  – 管理画面: 内部パラメーター設定
@@ -18,7 +17,7 @@ if (isset($_GET['logout'])) {
     exit;
 }
 
-// ---- ログイン処理 ----------------------------------------
+// ---- ログイン認証必須 ----------------------------------------
 if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
         $stored = get_setting('admin_pass');
@@ -30,6 +29,7 @@ if (!isset($_SESSION[ADMIN_SESSION_KEY])) {
         $error = 'パスワードが正しくありません。';
     }
     ?>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
