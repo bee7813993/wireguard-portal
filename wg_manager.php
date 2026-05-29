@@ -187,21 +187,25 @@ class WgManager {
         $iface   = get_setting('wg_interface') ?: 'wg0';
 
         return "# 1. WireGuardインストール\n"
-             . "sudo apt update && sudo apt install wireguard -y\n\n"
+             . "sudo apt update && sudo apt install wireguard iptables -y\n\n"
              . "# 2. IP フォワーディングを有効化 (IPv4 & IPv6)\n"
              . "echo \"net.ipv4.ip_forward=1\" | sudo tee -a /etc/sysctl.conf\n"
              . "echo \"net.ipv6.conf.all.forwarding=1\" | sudo tee -a /etc/sysctl.conf\n"
              . "sudo sysctl -p\n\n"
-             . "# 3. {$iface}.conf を配置 (上の内容を保存)\n"
+             . "# 3. ip6tables NAT モジュールを有効化 (IPv6 NAT に必要)\n"
+             . "sudo modprobe ip6table_nat\n"
+             . "echo 'ip6table_nat' | sudo tee -a /etc/modules\n\n"
+             . "# 4. {$iface}.conf を配置 (上の内容を保存)\n"
              . "sudo nano /etc/wireguard/{$iface}.conf\n\n"
-             . "# 4. 起動・自動起動\n"
+             . "# 5. 起動・自動起動\n"
              . "sudo wg-quick up {$iface}\n"
              . "sudo systemctl enable wg-quick@{$iface}\n\n"
-             . "# 5. ファイアウォール開放\n"
+             . "# 6. ファイアウォール開放\n"
              . "sudo ufw allow {$wg_port}/udp\n"
              . "sudo ufw allow {$ext_port}/tcp\n\n"
-             . "# 6. 状態確認\n"
-             . "sudo wg show\n";
+             . "# 7. 状態確認\n"
+             . "sudo wg show\n"
+             . "sudo ip6tables -t nat -L -n\n";
     }
 
     // ---- WireGuard停止 & iptables全削除 -----------------

@@ -339,6 +339,22 @@ tr:hover td{background:#fafbfc}
           既存の全ポートを含む WireGuard 設定を IPv6 ルール付きで書き直し、wg-quick で反映します。<br>
           適用後、各クライアントはポート一覧の「設定を表示」から新しい .conf を取得してください。
         </p>
+        <details style="margin-bottom:.9rem;font-size:12px;color:var(--muted)">
+          <summary style="cursor:pointer;font-family:var(--mono);color:var(--accent2)">事前確認: VPS で必要な設定</summary>
+          <div style="margin-top:.6rem;background:#f8fafc;border:1px solid var(--border);border-radius:7px;padding:10px 14px;line-height:2">
+            <code style="display:block;font-family:var(--mono);font-size:11px;white-space:pre"># IPv6 フォワーディング確認 (1 なら OK)
+sysctl net.ipv6.conf.all.forwarding
+# → 0 の場合:
+sudo sysctl -w net.ipv6.conf.all.forwarding=1
+echo 'net.ipv6.conf.all.forwarding=1' | sudo tee -a /etc/sysctl.conf
+
+# ip6table_nat モジュール確認
+lsmod | grep ip6table_nat
+# → 何も出ない場合:
+sudo modprobe ip6table_nat
+echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
+          </div>
+        </details>
         <form method="post" onsubmit="return confirm('WireGuard設定をIPv6対応で再適用します。よろしいですか？')">
           <input type="hidden" name="action" value="apply_ipv6">
           <button type="submit" class="apply-btn">IPv6 対応で全ポートを再適用</button>
