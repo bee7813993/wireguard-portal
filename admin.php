@@ -100,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 
 // ---- 設定保存 --------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
-    $fields = ['vps_ip','wg_port','nic','subnet','wg_interface'];
+    $fields = ['vps_ip','wg_port','nic','subnet','subnet_ipv6','wg_interface'];
     foreach ($fields as $f) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
@@ -126,6 +126,7 @@ $cfg = [
     'wg_port'      => get_setting('wg_port'),
     'nic'          => get_setting('nic'),
     'subnet'       => get_setting('subnet'),
+    'subnet_ipv6'  => get_setting('subnet_ipv6'),
     'wg_interface' => get_setting('wg_interface') ?: 'wg0',
     'auto_apply'   => get_setting('auto_apply'),
     'delete_mode'  => get_setting('delete_mode') ?: 'none',
@@ -234,6 +235,11 @@ tr:hover td{background:#fafbfc}
           <label>WireGuard サブネット (先頭3オクテット)</label>
           <div class="desc">例: 10.0.0 → サーバー 10.0.0.1, クライアントは 10.0.0.2〜</div>
           <input type="text" name="subnet" value="<?= htmlspecialchars($cfg['subnet']) ?>" placeholder="10.0.0">
+        </div>
+        <div class="field">
+          <label>WireGuard IPv6 サブネット</label>
+          <div class="desc">例: fd00:: → サーバー fd00::1, クライアントは fd00::2〜 (ULA推奨)</div>
+          <input type="text" name="subnet_ipv6" value="<?= htmlspecialchars($cfg['subnet_ipv6']) ?>" placeholder="fd00::">
         </div>
         <div class="field">
           <label>WireGuard インターフェース名</label>
