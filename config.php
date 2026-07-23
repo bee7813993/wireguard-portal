@@ -47,15 +47,18 @@ function get_db(): PDO {
 
     // デフォルト設定を挿入 (初回のみ)
     $defaults = [
-        'vps_ip'       => '203.0.113.1',
-        'wg_port'      => '51820',
-        'nic'          => 'eth0',
-        'subnet'       => '10.0.0',
-        'subnet_ipv6'  => 'fd00::',
-        'wg_interface' => 'wg0',
-        'auto_apply'   => '0',
-        'delete_mode'  => 'none',
-        'admin_pass'   => password_hash('changeme', PASSWORD_DEFAULT),
+        'vps_ip'        => '203.0.113.1',
+        'wg_port'       => '51820',
+        'nic'           => 'eth0',
+        'subnet'        => '10.0.0',
+        'subnet_ipv6'   => 'fd00::',
+        'wg_interface'  => 'wg0',
+        'auto_apply'    => '0',
+        'delete_mode'   => 'none',
+        'check_listen'  => '1',
+        'blocked_ports' => '',
+        'allowed_ports' => '',
+        'admin_pass'    => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
     foreach ($defaults as $k => $v) $stmt->execute([':k' => $k, ':v' => $v]);
@@ -138,4 +141,129 @@ function validate_port(mixed $port): int {
         throw new InvalidArgumentException('ポート番号は 1024〜65535 の範囲で指定してください。');
     }
     return $p;
+}
+
+// ---- ポート範囲リストのパース ----------------------------
+// "2222, 8000-8100" 形式を [[2222,2222],[8000,8100]] に変換。
+// 書式不正の場合は null を返す。空文字は空配列。
+function parse_port_ranges(string $spec): ?array {
+    $ranges = [];
+    if (trim($spec) === '') return $ranges;
+
+    foreach (preg_split('/[,\s]+/', trim($spec)) as $part) {
+        if ($part === '') continue;
+        if (preg_match('/^(\d{1,5})-(\d{1,5})$/', $part, $m)) {
+            $lo = (int)$m[1];
+            $hi = (int)$m[2];
+        } elseif (preg_match('/^\d{1,5}$/', $part)) {
+            $lo = $hi = (int)$part;
+        } else {
+            return null;
+        }
+        if ($lo < 1 || $hi > 65535 || $lo > $hi) return null;
+        $ranges[] = [$lo, $hi];
+    }
+    return $ranges;
+}
+
+function port_in_ranges(int $port, array $ranges): bool {
+    foreach ($ranges as [$lo, $hi]) {
+        if ($port >= $lo && $port <= $hi) return true;
+    }
+    return false;
+}
+
+// ---- LISTEN 中の TCP ポート一覧取得 ----------------------
+// ss (iproute2) を優先し netstat にフォールバック。
+// exec が無効化されている等、取得できない環境では null (チェック不能) を返す。
+// ループバック (127.0.0.0/8, ::1) のみで待ち受けるサービスは
+// 外部 NIC の DNAT と競合しないため一覧に含めない。
+function get_listening_tcp_ports(): ?array {
+    if (!function_exists('exec')) return null;
+
+    foreach (['ss -tlnH', 'netstat -tln'] as $cmd) {
+        $lines  = [];
+        $status = 1;
+        @exec($cmd . ' 2>/dev/null', $lines, $status);
+        if ($status !== 0 || !$lines) continue;
+
+        $ports = [];
+        foreach ($lines as $line) {
+            // Local Address:Port 列 (例 0.0.0.0:22, [::]:80, *:443) からポートを抽出。
+            // 接続先側は ポートが "*" のため数値末尾にマッチしない。
+            foreach (preg_split('/\s+/', trim($line)) as $token) {
+                if (!preg_match('/^(.*):(\d{1,5})$/', $token, $m)) continue;
+                $addr = trim($m[1], '[]');
+                if (str_starts_with($addr, '127.') || $addr === '::1' || str_starts_with($addr, '::1%')
+                    || str_starts_with($addr, '::ffff:127.')) {
+                    continue;
+                }
+                $p = (int)$m[2];
+                if ($p >= 1 && $p <= 65535) $ports[$p] = true;
+            }
+        }
+        return array_keys($ports);
+    }
+    return null;
+}
+
+// ---- 設定生成時のポート利用可否チェック ------------------
+// 範囲チェック (validate_port) 通過後のポートに対し、
+// 既存サービスとの衝突・管理者による制限を検査する。
+// 削除時には呼ばない (衝突したポートの削除は常に可能にする)。
+function assert_port_allowed(int $port): void {
+    // 発行済みポートの再発行は制限の対象外
+    // (設定の更新・削除トークンの再発行を妨げない)
+    $stmt = get_db()->prepare("SELECT COUNT(*) FROM wg_configs WHERE port = ?");
+    $stmt->execute([$port]);
+    if ((int)$stmt->fetchColumn() > 0) return;
+
+    // 1. 許可リスト (設定時のみ): リスト外は拒否
+    $allowed_spec = trim(get_setting('allowed_ports'));
+    if ($allowed_spec !== '') {
+        $allowed = parse_port_ranges($allowed_spec);
+        if ($allowed !== null && $allowed !== [] && !port_in_ranges($port, $allowed)) {
+            throw new InvalidArgumentException(
+                "ポート {$port} は利用できません。利用可能なポート: {$allowed_spec}"
+            );
+        }
+    }
+
+    // 2. 禁止リスト
+    $blocked_spec = trim(get_setting('blocked_ports'));
+    if ($blocked_spec !== '') {
+        $blocked = parse_port_ranges($blocked_spec);
+        if ($blocked !== null && port_in_ranges($port, $blocked)) {
+            throw new InvalidArgumentException(
+                "ポート {$port} は管理者によって禁止されています。別のポートを指定してください。"
+            );
+        }
+    }
+
+    // 3. 予約ポート: WireGuard 本体と本ポータル自身
+    if ($port === (int)get_setting('wg_port')) {
+        throw new InvalidArgumentException(
+            "ポート {$port} は WireGuard 本体が使用するため利用できません。"
+        );
+    }
+    $portal_port = (int)($_SERVER['SERVER_PORT'] ?? 0);
+    if ($portal_port !== 0 && $port === $portal_port) {
+        throw new InvalidArgumentException(
+            "ポート {$port} はこのポータル自身が使用しているため利用できません。"
+        );
+    }
+
+    // 4. サーバー上で LISTEN 中の実サービス
+    //    (発行済みポートの転送は NAT のため LISTEN には現れず、再発行は妨げない)
+    if (get_setting('check_listen') !== '0') {
+        $listening = get_listening_tcp_ports();
+        if ($listening === null) {
+            write_log('WARN', "ポート {$port}: LISTEN 状態を取得できないため使用中チェックをスキップしました");
+        } elseif (in_array($port, $listening, true)) {
+            throw new InvalidArgumentException(
+                "ポート {$port} はサーバー上の別のサービスが使用中のため利用できません。" .
+                "このポートに設定すると既存サービスへアクセスできなくなります。"
+            );
+        }
+    }
 }
