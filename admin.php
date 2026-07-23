@@ -127,12 +127,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 }
 
 // ---- 設定保存 --------------------------------------------
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
+// action=save_settings のマーカーを持つ設定フォームのみ処理する
+// (マーカーのない POST — 認証済みセッションでのログインフォーム再送信等 —
+//  が設定を書き換えてしまうのを防ぐ)
+$invalid_specs = [];  // 書式不正で保存されなかった入力の再表示用
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_settings') {
+    $save_errors = [];
     $fields = ['vps_ip','wg_port','nic','subnet','subnet_ipv6','wg_interface'];
     foreach ($fields as $f) {
         if (isset($_POST[$f])) set_setting($f, trim($_POST[$f]));
     }
-    set_setting('auto_apply', isset($_POST['auto_apply']) ? '1' : '0');
+    set_setting('auto_apply',   isset($_POST['auto_apply'])   ? '1' : '0');
+    set_setting('check_listen', isset($_POST['check_listen']) ? '1' : '0');
+    // ポート制限リスト: 書式を検証してから保存
+    foreach (['blocked_ports' => '禁止ポート', 'allowed_ports' => '許可ポート'] as $f => $label) {
+        if (!isset($_POST[$f])) continue;
+        $spec   = trim($_POST[$f]);
+        $ranges = parse_port_ranges($spec);
+        if ($ranges === null) {
+            $save_errors[]     = "{$label}の書式が不正です (例: 2222, 8000-8100)。";
+            $invalid_specs[$f] = $spec;
+            continue;
+        }
+        // 許可ポートは基本範囲 (1024〜65535) と組み合わされるため、
+        // 全範囲が 1024 未満だと全ポートが生成不能になる
+        if ($f === 'allowed_ports' && $ranges !== []) {
+            $usable = false;
+            foreach ($ranges as [, $hi]) {
+                if ($hi >= 1024) { $usable = true; break; }
+            }
+            if (!$usable) {
+                $save_errors[]     = '許可ポートには 1024 以上のポートを含めてください (1024 未満は範囲チェックで常に拒否されます)。';
+                $invalid_specs[$f] = $spec;
+                continue;
+            }
+        }
+        set_setting($f, $spec);
+    }
     $allowed_modes = ['none', 'token', 'admin'];
     $new_mode = $_POST['delete_mode'] ?? 'none';
     set_setting('delete_mode', in_array($new_mode, $allowed_modes, true) ? $new_mode : 'none');
@@ -141,10 +172,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
             set_setting('admin_pass', password_hash($_POST['new_pass'], PASSWORD_DEFAULT));
             $success = 'パスワードを変更しました。';
         } else {
-            $error = '新しいパスワードが一致しません。';
+            $save_errors[] = '新しいパスワードが一致しません。';
         }
     }
-    if (!$error) $success = $success ?: '設定を保存しました。';
+    if ($save_errors) {
+        $error = implode(' ', $save_errors) . ' エラーになった項目以外の設定は保存されています。';
+    } else {
+        $success = $success ?: '設定を保存しました。';
+    }
     write_log('INFO', '管理者が設定を変更しました');
 }
 
@@ -158,7 +193,14 @@ $cfg = [
     'wg_interface' => get_setting('wg_interface') ?: 'wg0',
     'auto_apply'   => get_setting('auto_apply'),
     'delete_mode'  => get_setting('delete_mode') ?: 'none',
+    'check_listen'  => get_setting('check_listen') !== '0' ? '1' : '0',
+    'blocked_ports' => $invalid_specs['blocked_ports'] ?? get_setting('blocked_ports'),
+    'allowed_ports' => $invalid_specs['allowed_ports'] ?? get_setting('allowed_ports'),
 ];
+
+// ---- 現在 LISTEN 中の TCP ポート (参考表示用) --------------
+$listening_ports = get_listening_tcp_ports();
+if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
 $rows = get_db()->query("SELECT port, client_pub, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
@@ -260,6 +302,7 @@ tr:hover td{background:#fafbfc}
       <?php if ($success): ?><p class="msg-ok"><?= htmlspecialchars($success) ?></p><?php endif; ?>
       <?php if ($error):   ?><p class="msg-err"><?= htmlspecialchars($error) ?></p><?php endif; ?>
       <form method="post">
+        <input type="hidden" name="action" value="save_settings">
         <div class="field">
           <label>VPS グローバル IP</label>
           <div class="desc">クライアントが接続する WireGuard サーバーの IP</div>
@@ -310,6 +353,38 @@ tr:hover td{background:#fafbfc}
             <option value="token" <?= $cfg['delete_mode'] === 'token' ? 'selected' : '' ?>>token — ポート番号 + 削除トークン</option>
             <option value="admin" <?= $cfg['delete_mode'] === 'admin' ? 'selected' : '' ?>>admin — 管理者のみ</option>
           </select>
+        </div>
+
+        <div class="divider"></div>
+        <div class="section-title" style="margin-bottom:.5rem">ポート制限</div>
+        <div class="desc" style="margin-bottom:1rem">制限は新規ポートの発行時のみ適用されます。発行済みポートの再生成・削除は制限されません。</div>
+        <div class="field">
+          <label>使用中ポートの自動ブロック</label>
+          <div class="desc">サーバー上で LISTEN 中の TCP ポート (SSH・Web サーバー等) への設定生成を拒否します。既存サービスへのアクセス遮断を防ぎます。ループバック (127.0.0.1 / ::1) のみで待ち受けるサービスは外部ポート転送と競合しないため対象外です。</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0;margin-top:6px;cursor:pointer">
+            <input type="checkbox" name="check_listen" value="1" <?= $cfg['check_listen'] === '1' ? 'checked' : '' ?> style="width:16px;height:16px;accent-color:var(--accent)">
+            自動ブロックを有効にする (推奨)
+          </label>
+          <?php if ($listening_ports !== null): ?>
+          <div class="desc" style="margin-top:8px;margin-bottom:0">
+            現在 LISTEN 中の TCP ポート (ループバック専用を除く):
+            <span style="font-family:var(--mono);color:var(--text)"><?= htmlspecialchars(implode(', ', $listening_ports)) ?></span>
+          </div>
+          <?php else: ?>
+          <div class="desc" style="margin-top:8px;margin-bottom:0;color:#b45309">
+            ⚠ LISTEN 中ポートを取得できません (ss / netstat / exec が利用不可)。この環境では自動ブロックは動作しないため、禁止ポートを手動で設定してください。
+          </div>
+          <?php endif; ?>
+        </div>
+        <div class="field">
+          <label>禁止ポート</label>
+          <div class="desc">設定生成を禁止するポート。カンマ区切り・範囲指定可 (例: 2222, 8000-8100)。一時停止中のサービスのポートなど、自動ブロックで検出できないポートの保護に使用します。</div>
+          <input type="text" name="blocked_ports" value="<?= htmlspecialchars($cfg['blocked_ports']) ?>" placeholder="2222, 8000-8100">
+        </div>
+        <div class="field">
+          <label>許可ポート</label>
+          <div class="desc">指定すると、このリストのポートのみ設定生成を許可します (例: 11000-12000)。空欄なら制限なし。基本範囲 (1024〜65535) と組み合わせて適用されるため 1024 以上を含める必要があります。禁止ポートより優先度は低く、両方に該当する場合は禁止されます。</div>
+          <input type="text" name="allowed_ports" value="<?= htmlspecialchars($cfg['allowed_ports']) ?>" placeholder="11000-12000">
         </div>
 
         <div class="divider"></div>

@@ -421,6 +421,7 @@ footer a:hover { color: var(--accent); }
         <div>
           <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
           <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります</div>
+          <div class="guide-sub">※ サーバー上で使用中のポートなど、指定できないポート番号があります。エラーになった場合は別の番号をお試しください</div>
         </div>
       </div>
       <div class="guide-step">

@@ -26,7 +26,8 @@ $body = json_decode(file_get_contents('php://input'), true);
 $port_raw = $body['port'] ?? $_POST['port'] ?? null;
 
 try {
-    $port   = validate_port($port_raw);
+    $port = validate_port($port_raw);
+    assert_port_allowed($port);
     $result = WgManager::issue($port);
     echo json_encode(['ok' => true, 'data' => $result]);
 } catch (InvalidArgumentException $e) {
