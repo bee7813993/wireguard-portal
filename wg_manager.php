@@ -6,6 +6,18 @@ require_once __DIR__ . '/config.php';
 
 class WgManager {
 
+    // ポータルが生成した iptables/ip6tables ルールに付ける目印。
+    // 削除対象の判定はこのコメントの有無だけで行い、
+    // 管理者が手動で追加したルールを巻き込まないようにする。
+    // (空白を含まない語にすること: iptables -S の出力が引用符無しになり
+    //  PostUp/PostDown 行との対応が崩れない)
+    private const RULE_COMMENT = 'wgportal';
+
+    // ---- ルールに付与する comment match ------------------
+    private static function comment_opt(): string {
+        return '-m comment --comment ' . self::RULE_COMMENT;
+    }
+
     // ---- インターフェース名バリデーション ---------------
     private static function sanitize_interface(string $iface): string {
         if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{0,14}$/', $iface)) {
@@ -55,16 +67,19 @@ class WgManager {
         $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
 
         $db   = get_db();
-        $rows = $db->query("SELECT id, port, client_pub FROM wg_configs ORDER BY id ASC")->fetchAll();
+        $rows = $db->query("SELECT id, port, client_pub, dest_port FROM wg_configs ORDER BY id ASC")->fetchAll();
+
+        // ポータル製ルールの目印 (PostUp / PostDown で必ず同じ文字列を使う)
+        $cmt = self::comment_opt();
 
         // MASQUERADE は一度だけ (IPv4 & IPv6)
         $up_lines   = [
-            "iptables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE",
-            "ip6tables -t nat -A POSTROUTING -o {$iface} -j MASQUERADE",
+            "iptables -t nat -A POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
+            "ip6tables -t nat -A POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
         ];
         $down_lines = [
-            "iptables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE",
-            "ip6tables -t nat -D POSTROUTING -o {$iface} -j MASQUERADE",
+            "iptables -t nat -D POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
+            "ip6tables -t nat -D POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
         ];
 
         $peer_blocks = '';
@@ -73,18 +88,19 @@ class WgManager {
             $client_ip  = $subnet . '.' . $octet;
             $client_ip6 = $subnet_ipv6 . dechex($octet);
             $port       = (int)$row['port'];
+            $dest       = (int)($row['dest_port'] ?? 0) ?: 80;
 
             // IPv4 ルール
-            $up_lines[]   = "iptables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
-            $up_lines[]   = "iptables -A FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
-            $down_lines[] = "iptables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination {$client_ip}:80";
-            $down_lines[] = "iptables -D FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT";
+            $up_lines[]   = "iptables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination {$client_ip}:{$dest}";
+            $up_lines[]   = "iptables -A FORWARD -p tcp -d {$client_ip} --dport {$dest} {$cmt} -j ACCEPT";
+            $down_lines[] = "iptables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination {$client_ip}:{$dest}";
+            $down_lines[] = "iptables -D FORWARD -p tcp -d {$client_ip} --dport {$dest} {$cmt} -j ACCEPT";
 
             // IPv6 ルール
-            $up_lines[]   = "ip6tables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination [{$client_ip6}]:80";
-            $up_lines[]   = "ip6tables -A FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT";
-            $down_lines[] = "ip6tables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} -j DNAT --to-destination [{$client_ip6}]:80";
-            $down_lines[] = "ip6tables -D FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT";
+            $up_lines[]   = "ip6tables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination [{$client_ip6}]:{$dest}";
+            $up_lines[]   = "ip6tables -A FORWARD -p tcp -d {$client_ip6} --dport {$dest} {$cmt} -j ACCEPT";
+            $down_lines[] = "ip6tables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination [{$client_ip6}]:{$dest}";
+            $down_lines[] = "ip6tables -D FORWARD -p tcp -d {$client_ip6} --dport {$dest} {$cmt} -j ACCEPT";
 
             // WireGuardは両方のアドレスを許可
             $peer_blocks .= "\n[Peer]\n"
@@ -110,7 +126,8 @@ class WgManager {
         string $client_pub,
         string $server_ip,
         string $client_ip,
-        int    $ext_port
+        int    $ext_port,
+        int    $dest_port = 80
     ): string {
         $wg_port = get_setting('wg_port');
         $nic     = get_setting('nic');
@@ -123,10 +140,10 @@ class WgManager {
         $client_ip6 = $subnet_ipv6 . dechex($ipv4_last);
         $server_ip6 = $subnet_ipv6 . '1';
 
-        $post_up   = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-A', '-A');
-        $post_up6  = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-A', '-A');
-        $post_down = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-D', '-D');
-        $post_down6 = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-D', '-D');
+        $post_up   = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-A', '-A', $dest_port);
+        $post_up6  = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-A', '-A', $dest_port);
+        $post_down = self::iptables_rules($nic, $iface, $ext_port, $client_ip, '-D', '-D', $dest_port);
+        $post_down6 = self::ip6tables_rules($nic, $iface, $ext_port, $client_ip6, '-D', '-D', $dest_port);
 
         return "[Interface]\n"
              . "Address = {$server_ip}/24, {$server_ip6}/64\n"
@@ -157,12 +174,14 @@ class WgManager {
         int    $ext_port,
         string $client_ip,
         string $nat_flag,
-        string $fwd_flag
+        string $fwd_flag,
+        int    $dest_port = 80
     ): array {
+        $cmt = self::comment_opt();
         return [
-            "iptables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} -j DNAT --to-destination {$client_ip}:80",
-            "iptables {$fwd_flag} FORWARD -p tcp -d {$client_ip} --dport 80 -j ACCEPT",
-            "iptables -t nat {$nat_flag} POSTROUTING -o {$iface} -j MASQUERADE",
+            "iptables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} {$cmt} -j DNAT --to-destination {$client_ip}:{$dest_port}",
+            "iptables {$fwd_flag} FORWARD -p tcp -d {$client_ip} --dport {$dest_port} {$cmt} -j ACCEPT",
+            "iptables -t nat {$nat_flag} POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
         ];
     }
 
@@ -172,12 +191,14 @@ class WgManager {
         int    $ext_port,
         string $client_ip6,
         string $nat_flag,
-        string $fwd_flag
+        string $fwd_flag,
+        int    $dest_port = 80
     ): array {
+        $cmt = self::comment_opt();
         return [
-            "ip6tables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} -j DNAT --to-destination [{$client_ip6}]:80",
-            "ip6tables {$fwd_flag} FORWARD -p tcp -d {$client_ip6} --dport 80 -j ACCEPT",
-            "ip6tables -t nat {$nat_flag} POSTROUTING -o {$iface} -j MASQUERADE",
+            "ip6tables -t nat {$nat_flag} PREROUTING -i {$nic} -p tcp --dport {$ext_port} {$cmt} -j DNAT --to-destination [{$client_ip6}]:{$dest_port}",
+            "ip6tables {$fwd_flag} FORWARD -p tcp -d {$client_ip6} --dport {$dest_port} {$cmt} -j ACCEPT",
+            "ip6tables -t nat {$nat_flag} POSTROUTING -o {$iface} {$cmt} -j MASQUERADE",
         ];
     }
 
@@ -229,66 +250,114 @@ class WgManager {
         return ['success' => true, 'output' => $output ?: "iptablesルールをクリアしました。"];
     }
 
-    // ---- 残留iptablesルールの全削除 ----------------------
+    // ---- 残留iptablesルールの削除 ------------------------
+    // 削除対象はポータルが付けた --comment wgportal を持つルールのみ。
+    // サブネット文字列での一致判定 (v1.x) は、同じサブネット宛の
+    // 手動ルールまで巻き込んで削除してしまうため使用しない。
     private static function flush_stale_iptables(string $iface): void {
-        $subnet = get_setting('subnet');
+        foreach (self::rule_chains() as [$cmd, $table_opt, $chain]) {
+            foreach (self::list_rules($cmd, $table_opt, $chain) as $rule) {
+                if (!self::is_portal_rule($rule)) continue;
+                self::delete_rule($cmd, $table_opt, $rule);
+            }
+        }
+
+        // コメント付与前に作られた旧ルールを一度だけ掃除する
+        self::flush_legacy_iptables($iface);
+    }
+
+    // ---- 走査対象チェーン一覧 [コマンド, テーブル指定, チェーン] --
+    private static function rule_chains(): array {
+        return [
+            ['iptables',  '-t nat ', 'PREROUTING'],
+            ['iptables',  '',        'FORWARD'],
+            ['iptables',  '-t nat ', 'POSTROUTING'],
+            // ip6tables も xt_comment (comment match) を共有するため
+            // IPv4 と同じ書式で -m comment --comment が使える
+            ['ip6tables', '-t nat ', 'PREROUTING'],
+            ['ip6tables', '',        'FORWARD'],
+            ['ip6tables', '-t nat ', 'POSTROUTING'],
+        ];
+    }
+
+    private static function list_rules(string $cmd, string $table_opt, string $chain): array {
+        $out = [];
+        exec("sudo {$cmd} {$table_opt}-S {$chain} 2>/dev/null", $out);
+        return $out;
+    }
+
+    // ---- ポータルが作成したルールか判定 -------------------
+    private static function is_portal_rule(string $rule): bool {
+        // iptables のバージョンによりコメントが引用符付きで出力される場合がある
+        return (bool)preg_match(
+            '/--comment\s+"?' . preg_quote(self::RULE_COMMENT, '/') . '"?(\s|$)/',
+            $rule
+        );
+    }
+
+    // ---- -S の出力行をそのまま -D で削除 ------------------
+    private static function delete_rule(string $cmd, string $table_opt, string $rule): void {
+        $del = preg_replace('/^-A /', '-D ', $rule, 1);
+
+        // 出力行をシェルへ素通しせず、トークン単位でエスケープする。
+        // 対象ルールはポータル製に限られ、値に空白は含まれないため
+        // 空白区切りで安全に分解できる。
+        $argv = [];
+        foreach (preg_split('/\s+/', trim($del)) as $token) {
+            // 引用符付きで出力されたコメントを元に戻す
+            if (preg_match('/^"(.*)"$/', $token, $m)) $token = $m[1];
+            $argv[] = escapeshellarg($token);
+        }
+        exec("sudo {$cmd} {$table_opt}" . implode(' ', $argv) . ' 2>/dev/null');
+    }
+
+    // ---- 旧形式 (コメント無し) ルールの一度きりの掃除 ------
+    // v1.x が生成したルールにはコメントが無いため、
+    // ポータルが実際に出力していた形状に完全一致するものだけを削除する
+    // (転送先ポートは常に 80 固定だった)。管理者の手動ルールは
+    // 形状が一致しないため残る。
+    private static function flush_legacy_iptables(string $iface): void {
+        if (get_setting('iptables_comment_migrated') === '1') return;
+
+        $q           = fn(string $s): string => preg_quote($s, '/');
+        $nic         = get_setting('nic');
+        $subnet      = get_setting('subnet');
         $subnet_ipv6 = get_setting('subnet_ipv6');
+        $masq        = '/^-A POSTROUTING -o ' . $q($iface) . ' -j MASQUERADE$/';
 
-        // IPv4 処理
-        // nat PREROUTING: サブネット宛のDNATルールを削除
-        exec('sudo iptables -t nat -S PREROUTING 2>/dev/null', $nat_rules);
-        foreach ($nat_rules as $rule) {
-            if (str_contains($rule, $subnet)) {
-                $del = str_replace('-A PREROUTING', '-D PREROUTING', $rule);
-                exec('sudo iptables -t nat ' . $del . ' 2>/dev/null');
+        $legacy = [
+            ['iptables',  '-t nat ', 'PREROUTING',
+             '/^-A PREROUTING -i ' . $q($nic) . ' -p tcp (?:-m tcp )?--dport \d{1,5}'
+             . ' -j DNAT --to-destination ' . $q($subnet) . '\.\d{1,3}:80$/'],
+            ['iptables',  '',        'FORWARD',
+             '/^-A FORWARD -d ' . $q($subnet) . '\.\d{1,3}\/32 -p tcp (?:-m tcp )?--dport 80 -j ACCEPT$/'],
+            ['iptables',  '-t nat ', 'POSTROUTING', $masq],
+            ['ip6tables', '-t nat ', 'PREROUTING',
+             '/^-A PREROUTING -i ' . $q($nic) . ' -p tcp (?:-m tcp )?--dport \d{1,5}'
+             . ' -j DNAT --to-destination \[' . $q($subnet_ipv6) . '[0-9a-fA-F]{1,4}\]:80$/'],
+            ['ip6tables', '',        'FORWARD',
+             '/^-A FORWARD -d ' . $q($subnet_ipv6) . '[0-9a-fA-F]{1,4}\/128 -p tcp (?:-m tcp )?--dport 80 -j ACCEPT$/'],
+            ['ip6tables', '-t nat ', 'POSTROUTING', $masq],
+        ];
+
+        $listed  = false;
+        $removed = 0;
+        foreach ($legacy as [$cmd, $table_opt, $chain, $pattern]) {
+            $rules = self::list_rules($cmd, $table_opt, $chain);
+            // -S は最低でもポリシー行 (-P ...) を返す。空なら参照失敗
+            if ($rules) $listed = true;
+            foreach ($rules as $rule) {
+                if (!preg_match($pattern, $rule)) continue;
+                self::delete_rule($cmd, $table_opt, $rule);
+                $removed++;
             }
         }
 
-        // filter FORWARD: サブネット宛のFORWARDルールを削除
-        exec('sudo iptables -S FORWARD 2>/dev/null', $fwd_rules);
-        foreach ($fwd_rules as $rule) {
-            if (str_contains($rule, $subnet)) {
-                $del = str_replace('-A FORWARD', '-D FORWARD', $rule);
-                exec('sudo iptables ' . $del . ' 2>/dev/null');
-            }
-        }
+        // iptables を参照できない環境では完了扱いにせず次回に持ち越す
+        if (!$listed) return;
 
-        // nat POSTROUTING: このインターフェースのMASQUERADEルールを削除
-        exec('sudo iptables -t nat -S POSTROUTING 2>/dev/null', $post_rules);
-        foreach ($post_rules as $rule) {
-            if (str_contains($rule, $iface) && str_contains($rule, 'MASQUERADE')) {
-                $del = str_replace('-A POSTROUTING', '-D POSTROUTING', $rule);
-                exec('sudo iptables -t nat ' . $del . ' 2>/dev/null');
-            }
-        }
-
-        // IPv6 処理
-        // nat PREROUTING: IPv6 サブネット宛のDNATルールを削除
-        exec('sudo ip6tables -t nat -S PREROUTING 2>/dev/null', $nat_rules6);
-        foreach ($nat_rules6 as $rule) {
-            if (str_contains($rule, $subnet_ipv6)) {
-                $del = str_replace('-A PREROUTING', '-D PREROUTING', $rule);
-                exec('sudo ip6tables -t nat ' . $del . ' 2>/dev/null');
-            }
-        }
-
-        // filter FORWARD: IPv6 サブネット宛のFORWARDルールを削除
-        exec('sudo ip6tables -S FORWARD 2>/dev/null', $fwd_rules6);
-        foreach ($fwd_rules6 as $rule) {
-            if (str_contains($rule, $subnet_ipv6)) {
-                $del = str_replace('-A FORWARD', '-D FORWARD', $rule);
-                exec('sudo ip6tables ' . $del . ' 2>/dev/null');
-            }
-        }
-
-        // nat POSTROUTING: このインターフェースのMASQUERADEルール（IPv6）を削除
-        exec('sudo ip6tables -t nat -S POSTROUTING 2>/dev/null', $post_rules6);
-        foreach ($post_rules6 as $rule) {
-            if (str_contains($rule, $iface) && str_contains($rule, 'MASQUERADE')) {
-                $del = str_replace('-A POSTROUTING', '-D POSTROUTING', $rule);
-                exec('sudo ip6tables -t nat ' . $del . ' 2>/dev/null');
-            }
-        }
+        set_setting('iptables_comment_migrated', '1');
+        write_log('INFO', "旧形式 (コメント無し) の iptables ルールを {$removed} 件削除しました");
     }
 
     // ---- サーバーへ設定を適用 ----------------------------
@@ -343,7 +412,7 @@ class WgManager {
     // ---- 既存ポートの設定を鍵を変えずに再生成 ------------
     public static function rebuild_client_conf(int $port): ?array {
         $db   = get_db();
-        $stmt = $db->prepare("SELECT id, client_priv, client_pub FROM wg_configs WHERE port = ?");
+        $stmt = $db->prepare("SELECT id, client_priv, client_pub, dest_port FROM wg_configs WHERE port = ?");
         $stmt->execute([$port]);
         $row = $stmt->fetch();
         if (!$row) return null;
@@ -359,13 +428,15 @@ class WgManager {
         );
         return [
             'port'        => $port,
+            'dest_port'   => (int)($row['dest_port'] ?? 0) ?: 80,
             'client_ip'   => $client_ip,
             'client_conf' => $client_conf,
         ];
     }
 
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
-    public static function issue(int $port): array {
+    // $dest_port はトンネル内 PC 側の転送先ポート (DNAT の宛先)
+    public static function issue(int $port, int $dest_port = 80): array {
         $db          = get_db();
         $server_kp   = get_or_create_server_keypair();
         $client_kp   = wg_generate_keypair();
@@ -383,9 +454,10 @@ class WgManager {
 
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
-            INSERT INTO wg_configs (port, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
-            VALUES (:port, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
+            INSERT INTO wg_configs (port, dest_port, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
+            VALUES (:port, :dport, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
             ON CONFLICT(port) DO UPDATE SET
+                dest_port    = excluded.dest_port,
                 client_priv  = excluded.client_priv,
                 client_pub   = excluded.client_pub,
                 server_priv  = excluded.server_priv,
@@ -393,12 +465,13 @@ class WgManager {
                 delete_token = excluded.delete_token,
                 updated_at   = CURRENT_TIMESTAMP
         ")->execute([
-            ':port' => $port,
-            ':cp'   => $client_kp['priv'],
-            ':cP'   => $client_kp['pub'],
-            ':sp'   => $server_kp['priv'],
-            ':sP'   => $server_kp['pub'],
-            ':dt'   => $hashed_token,
+            ':port'  => $port,
+            ':dport' => $dest_port,
+            ':cp'    => $client_kp['priv'],
+            ':cP'    => $client_kp['pub'],
+            ':sp'    => $server_kp['priv'],
+            ':sP'    => $server_kp['pub'],
+            ':dt'    => $hashed_token,
         ]);
 
         // UPSERT後に実際のidを取得してIPを算出（削除後の飛び番対策）
@@ -415,7 +488,7 @@ class WgManager {
         $server_conf = self::build_full_server_conf();
         $setup_cmds  = self::build_setup_commands($port);
 
-        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip})");
+        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip}, dest_port={$dest_port})");
 
         $applied = null;
         if (get_setting('auto_apply') === '1') {
@@ -429,6 +502,7 @@ class WgManager {
 
         return [
             'port'         => $port,
+            'dest_port'    => $dest_port,
             'client_ip'    => $client_ip,
             'client_conf'  => $client_conf,
             'server_conf'  => $server_conf,

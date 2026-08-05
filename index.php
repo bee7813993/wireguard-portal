@@ -4,6 +4,7 @@ require_once __DIR__ . '/config.php';
 $wg_iface    = htmlspecialchars(get_setting('wg_interface') ?: 'wg0');
 $auto_apply  = get_setting('auto_apply') === '1';
 $delete_mode = get_setting('delete_mode') ?: 'none';
+$default_dest_port = (int)(get_setting('default_dest_port') ?: 80) ?: 80;
 ?>
 <html lang="ja">
 <head>
@@ -422,6 +423,7 @@ footer a:hover { color: var(--accent); }
           <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
           <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります</div>
           <div class="guide-sub">※ サーバー上で使用中のポートなど、指定できないポート番号があります。エラーになった場合は別の番号をお試しください</div>
+          <div class="guide-sub">※ PC 側で待ち受けているポートが 80 以外の場合は <em>転送先ポート</em> も変更してください</div>
         </div>
       </div>
       <div class="guide-step">
@@ -447,8 +449,8 @@ footer a:hover { color: var(--accent); }
       <div class="guide-step">
         <span class="guide-num">5</span>
         <div>
-          <div class="guide-text">PC のポート <em>80</em> で Web サーバーを起動する</div>
-          <div class="guide-sub">外部からのアクセスはポート80に転送されます</div>
+          <div class="guide-text">PC の <em>転送先ポート</em> で Web サーバーを起動する</div>
+          <div class="guide-sub">外部からのアクセスはこのポートに転送されます (既定: <?= $default_dest_port ?>)</div>
         </div>
       </div>
     </div>
@@ -467,6 +469,12 @@ footer a:hover { color: var(--accent); }
         <input type="number" id="port-input" min="1024" max="65535"
                placeholder="11090" autocomplete="off">
         <div class="error-msg" id="port-error"></div>
+      </div>
+      <div class="input-wrap">
+        <label>転送先ポート (PC 側)</label>
+        <input type="number" id="dest-port-input" min="1" max="65535"
+               value="<?= $default_dest_port ?>" autocomplete="off">
+        <div class="error-msg" id="dest-port-error"></div>
       </div>
     </div>
 
@@ -488,6 +496,7 @@ footer a:hover { color: var(--accent); }
         <span class="chevron open">▾</span>
       </div>
       <div class="result-body open" id="panel-win">
+        <div class="guide-sub" id="fwd-summary" style="margin:0 0 10px"></div>
         <div class="code-block" id="win-conf-block">
           <button class="copy-btn" onclick="copyBlock('win-conf-block')">コピー</button>
         </div>
@@ -609,18 +618,29 @@ let winConfContent = '';
 let currentPort    = 0;
 
 async function doGenerate() {
-  const input = document.getElementById('port-input');
-  const errEl = document.getElementById('port-error');
-  const btn   = document.getElementById('gen-btn');
-  const label = document.getElementById('btn-label');
-  const port  = parseInt(input.value, 10);
+  const input     = document.getElementById('port-input');
+  const errEl     = document.getElementById('port-error');
+  const destInput = document.getElementById('dest-port-input');
+  const destErrEl = document.getElementById('dest-port-error');
+  const btn       = document.getElementById('gen-btn');
+  const label     = document.getElementById('btn-label');
+  const port      = parseInt(input.value, 10);
+  const destPort  = parseInt(destInput.value, 10);
 
-  errEl.textContent = '';
+  errEl.textContent     = '';
+  destErrEl.textContent = '';
   input.classList.remove('error');
+  destInput.classList.remove('error');
 
   if (!input.value || isNaN(port) || port < 1024 || port > 65535) {
     errEl.textContent = '1024〜65535 の範囲で入力してください。';
     input.classList.add('error');
+    return;
+  }
+
+  if (!destInput.value || isNaN(destPort) || destPort < 1 || destPort > 65535) {
+    destErrEl.textContent = '1〜65535 の範囲で入力してください。';
+    destInput.classList.add('error');
     return;
   }
 
@@ -631,7 +651,7 @@ async function doGenerate() {
     const res  = await fetch('generate.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port })
+      body: JSON.stringify({ port, dest_port: destPort })
     });
     const json = await res.json();
 
@@ -650,6 +670,8 @@ async function doGenerate() {
     setText('cmd-block',      d.setup_cmds);
 
     document.getElementById('dl-btn').textContent = `↓ wg-client_${d.port}.conf をダウンロード`;
+    document.getElementById('fwd-summary').textContent =
+      `外部ポート ${d.port} → PC (${d.client_ip}) のポート ${d.dest_port} に転送されます。`;
 
     // 削除トークン表示 (token モードのみ)
     const tokenNotice = document.getElementById('token-notice');
@@ -740,8 +762,10 @@ function togglePanel(panelId, header) {
   chevron.classList.toggle('open', open);
 }
 
-document.getElementById('port-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') doGenerate();
+['port-input', 'dest-port-input'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') doGenerate();
+  });
 });
 
 async function doDelete() {

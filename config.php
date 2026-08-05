@@ -25,6 +25,7 @@ function get_db(): PDO {
         CREATE TABLE IF NOT EXISTS wg_configs (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             port         INTEGER NOT NULL UNIQUE,
+            dest_port    INTEGER NOT NULL DEFAULT 80,
             client_priv  TEXT    NOT NULL,
             client_pub   TEXT    NOT NULL,
             server_priv  TEXT    NOT NULL,
@@ -39,10 +40,14 @@ function get_db(): PDO {
         );
     ");
 
-    // 既存DBへの delete_token カラム追加マイグレーション
+    // 既存DBへのカラム追加マイグレーション
     $cols = array_column($pdo->query("PRAGMA table_info(wg_configs)")->fetchAll(), 'name');
     if (!in_array('delete_token', $cols, true)) {
         $pdo->exec("ALTER TABLE wg_configs ADD COLUMN delete_token TEXT DEFAULT NULL");
+    }
+    // 転送先ポート (DNAT の宛先)。旧レコードは 80 固定だったため既定値も 80
+    if (!in_array('dest_port', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN dest_port INTEGER NOT NULL DEFAULT 80");
     }
 
     // デフォルト設定を挿入 (初回のみ)
@@ -58,6 +63,7 @@ function get_db(): PDO {
         'check_listen'  => '1',
         'blocked_ports' => '',
         'allowed_ports' => '',
+        'default_dest_port' => '80',
         'admin_pass'    => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
@@ -139,6 +145,17 @@ function validate_port(mixed $port): int {
     $p = (int)$port;
     if ($p < 1024 || $p > 65535) {
         throw new InvalidArgumentException('ポート番号は 1024〜65535 の範囲で指定してください。');
+    }
+    return $p;
+}
+
+// ---- 転送先ポート番号バリデーション ----------------------
+// トンネル内 PC 側の待ち受けポート。VPS の外部ポート (validate_port) と違い
+// well-known ポートで待ち受けるのは正常な使い方なので 1 以上を許可する。
+function validate_dest_port(mixed $port): int {
+    $p = (int)$port;
+    if ($p < 1 || $p > 65535) {
+        throw new InvalidArgumentException('転送先ポート番号は 1〜65535 の範囲で指定してください。');
     }
     return $p;
 }

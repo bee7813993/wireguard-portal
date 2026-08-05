@@ -14,13 +14,14 @@
       ↓ WireGuard トンネル (UDP :51821, IPv4 + IPv6)
 [社内 PC (WireGuard for Windows/Linux/macOS)]
       ↓ localhost
-[Web サーバー (XAMPP 等) :80]
+[Web サーバー (XAMPP 等) :80 など]
 ```
 
 - VPS 上の nginx が PHP-FPM で本ポータルを提供
 - 利用者がポート番号を入力 → WireGuard 設定ファイルを生成・自動適用
-- iptables/ip6tables DNAT で外部ポートを WireGuard トンネル内の PC ポート 80 に転送
+- iptables/ip6tables DNAT で外部ポートを WireGuard トンネル内の PC ポート（既定 80・変更可）に転送
 - IPv4・IPv6 の両方のトラフィックに対応
+- ポータルが作成する iptables ルールには `--comment wgportal` が付与され、手動で追加したルールとは区別される
 
 ---
 
@@ -128,6 +129,9 @@ sudo chmod 440 /etc/sudoers.d/wireguard-portal
 sudo visudo -c  # 構文チェック
 ```
 
+> **v1.2.0 以前から更新する場合:** ポータルの iptables ルールに `-m comment --comment wgportal` が付くようになりましたが、上記の `-D` / `-A` 行は末尾がワイルドカード `*` で、sudo は引数列全体を1つの文字列として照合するため、追加された引数もそのまま許可されます。**sudoers の変更は不要です。**
+> `-S` 行（`-t nat -S PREROUTING` など）はワイルドカードを持ちませんが、ポータルは引数を追加せずそのまま実行するため、こちらも変更は不要です。
+
 ### 6. IP フォワーディングの有効化（IPv4 & IPv6）
 
 ```bash
@@ -166,6 +170,7 @@ sudo ufw allow 51821/udp    # WireGuard (wg_port に合わせて変更)
 | WireGuard サブネット | VPN 内部ネットワーク（例: `10.100.10`。先頭3オクテット） |
 | WireGuard IPv6 サブネット | VPN 内部の IPv6 ネットワーク（例: `fd00::`。ULA推奨） |
 | WireGuard インターフェース名 | `wg0` が使用中なら `wg1` や `wg10` など別名を指定 |
+| 転送先ポートの既定値 | DNAT の宛先となる PC 側の待ち受けポート（既定: `80`）。トップ画面フォームの初期値になり、利用者が個別に変更できる |
 | 設定生成時に自動適用 | 有効にすると生成時に自動で `wg-quick` を適用する |
 | ユーザー削除モード | 一般ユーザーが設定を削除できる方法を選択する（後述） |
 | 使用中ポートの自動ブロック | サーバーで LISTEN 中の TCP ポートへの設定生成を拒否する（デフォルト: 有効） |
@@ -233,7 +238,9 @@ VPS 設定・WireGuard パラメーターを変更できます。変更は次回
 
 #### 「WireGuard 停止 & iptables クリア」ボタン
 
-WireGuard インターフェースを停止し、設定されたすべての iptables・ip6tables ルール（DNAT / FORWARD / MASQUERADE）を削除できます。使用をやめる場合や、iptables ルールが残留している場合に使用してください。
+WireGuard インターフェースを停止し、**ポータルが作成した** iptables・ip6tables ルール（DNAT / FORWARD / MASQUERADE）を削除します。使用をやめる場合や、iptables ルールが残留している場合に使用してください。
+
+手動で追加したルールは削除されません（後述の「iptables ルールの識別」を参照）。
 
 ### 発行済みポート一覧
 
@@ -270,6 +277,48 @@ WireGuard インターフェースを停止し、設定されたすべての ipt
 
 ---
 
+## iptables ルールの識別（`--comment wgportal`）
+
+ポータルが生成する iptables / ip6tables ルールには、すべて `-m comment --comment wgportal` が付与されます。
+
+```
+-A PREROUTING -i ens3 -p tcp -m tcp --dport 11090 -m comment --comment wgportal -j DNAT --to-destination 10.100.10.2:80
+-A FORWARD -d 10.100.10.2/32 -p tcp -m tcp --dport 80 -m comment --comment wgportal -j ACCEPT
+-A POSTROUTING -o wg0 -m comment --comment wgportal -j MASQUERADE
+```
+
+残留ルールの掃除（設定生成・削除・「設定適用」「停止」ボタンのたびに実行される）は、**このコメントを持つルールだけ**を対象にします。したがって、同じサブネット宛であっても管理者が手動で追加したルールは削除されません。
+
+```bash
+# ポータルが管理しているルールだけを一覧する
+sudo iptables-save | grep wgportal
+sudo ip6tables-save | grep wgportal
+```
+
+> `comment` match は `xt_comment` カーネルモジュールが提供し、iptables と ip6tables で共通です。IPv6 側でも同じ書式で使用できます。
+
+### v1.2.0 以前からの移行
+
+v1.2.0 以前は「ルールにサブネット文字列が含まれるか」だけで削除対象を判定していたため、同じサブネット宛の手動ルールまで削除されていました。
+
+更新後の**初回のポータル操作時に一度だけ**、旧形式（コメント無し）のルールを自動で掃除します。対象は旧バージョンが実際に出力していた形状に完全一致するルールのみ（転送先ポートが `80` 固定の DNAT / FORWARD と、WireGuard インターフェースの MASQUERADE）で、手動ルールは形状が一致しないため残ります。掃除の実行結果はアクティビティログに記録され、以後は再実行されません。
+
+移行手順:
+
+1. `git pull` でファイルを更新する
+2. 管理画面の「IPv6 対応で全ポートを再適用」ボタンを押す（または設定を1件生成する）
+   - 旧ルールが削除され、コメント付きの新ルールが投入されます
+3. 手動ルールが残っていることを確認する
+
+```bash
+sudo iptables-save | grep -v wgportal   # 手動ルールが残っているか確認
+sudo iptables-save | grep wgportal      # ポータル製ルールにコメントが付いているか確認
+```
+
+`/etc/wireguard/wg0.conf` の `PostUp` / `PostDown` も同じコメント付きの行に書き換わり、`-A` と `-D` で対になります。
+
+---
+
 ## 既存 wg0 と共存する場合
 
 `wg0` がすでに使用中の場合は、管理画面で以下を変更してください。
@@ -298,6 +347,22 @@ WireGuard インターフェースを停止し、設定されたすべての ipt
 ---
 
 ## 更新履歴
+
+### v1.3.0 (2026-08-05) — 手動 iptables ルールの保護 / 転送先ポートの設定
+
+**修正**
+- **手動 iptables ルールが消える問題を修正**: 残留ルールの掃除がサブネット文字列一致で判定していたため、同じサブネット宛の手動ルールまで削除されていた。ポータル製ルールに `-m comment --comment wgportal` を付与し、掃除はこのコメントを持つルールだけを対象にするよう変更（IPv4 / IPv6 の PREROUTING / FORWARD / POSTROUTING すべて）
+- 旧形式（コメント無し）のルールは、更新後の初回操作時に一度だけ自動で掃除される（対象は旧バージョンが出力していた形状に完全一致するルールのみ）
+- 削除コマンドを組み立てる際、`iptables -S` の出力をシェルへ素通しせずトークン単位でエスケープするよう変更
+
+**新機能**
+- **転送先ポートの設定**: DNAT の宛先ポートが `80` 固定だったのを設定可能に（`wg_configs.dest_port` を追加）。トップ画面のフォームでポートごとに指定でき、既定値は管理画面から変更できる
+
+**備考**
+- sudoers の変更は不要（`-D` / `-A` 行のワイルドカードが追加引数を許容する）
+- 既存レコードの `dest_port` は `80` として移行される
+
+---
 
 ### v1.2.0 (2026-07-24) — ポート制限
 

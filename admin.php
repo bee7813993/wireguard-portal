@@ -139,6 +139,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     }
     set_setting('auto_apply',   isset($_POST['auto_apply'])   ? '1' : '0');
     set_setting('check_listen', isset($_POST['check_listen']) ? '1' : '0');
+    // 転送先ポートの既定値: 範囲を検証してから保存
+    if (isset($_POST['default_dest_port'])) {
+        try {
+            set_setting('default_dest_port', (string)validate_dest_port(trim($_POST['default_dest_port'])));
+        } catch (InvalidArgumentException $e) {
+            $save_errors[]                    = $e->getMessage();
+            $invalid_specs['default_dest_port'] = trim($_POST['default_dest_port']);
+        }
+    }
     // ポート制限リスト: 書式を検証してから保存
     foreach (['blocked_ports' => '禁止ポート', 'allowed_ports' => '許可ポート'] as $f => $label) {
         if (!isset($_POST[$f])) continue;
@@ -196,6 +205,7 @@ $cfg = [
     'check_listen'  => get_setting('check_listen') !== '0' ? '1' : '0',
     'blocked_ports' => $invalid_specs['blocked_ports'] ?? get_setting('blocked_ports'),
     'allowed_ports' => $invalid_specs['allowed_ports'] ?? get_setting('allowed_ports'),
+    'default_dest_port' => $invalid_specs['default_dest_port'] ?? (get_setting('default_dest_port') ?: '80'),
 ];
 
 // ---- 現在 LISTEN 中の TCP ポート (参考表示用) --------------
@@ -203,7 +213,7 @@ $listening_ports = get_listening_tcp_ports();
 if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
-$rows = get_db()->query("SELECT port, client_pub, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+$rows = get_db()->query("SELECT port, dest_port, client_pub, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
 
 // ---- ログ読み込み ----------------------------------------
 $log_path  = dirname(DB_PATH) . '/portal.log';
@@ -334,6 +344,11 @@ tr:hover td{background:#fafbfc}
           <input type="text" name="wg_interface" value="<?= htmlspecialchars($cfg['wg_interface']) ?>" placeholder="wg0">
         </div>
         <div class="field">
+          <label>転送先ポートの既定値 (PC 側)</label>
+          <div class="desc">DNAT の宛先となるトンネル内 PC の待ち受けポート。トップ画面のフォームの初期値として使われ、利用者が個別に変更できます (例: 80, 8000)</div>
+          <input type="number" name="default_dest_port" value="<?= htmlspecialchars($cfg['default_dest_port']) ?>" min="1" max="65535" placeholder="80">
+        </div>
+        <div class="field">
           <label>設定生成時に自動適用</label>
           <div class="desc">有効にすると生成ボタン押下時に /etc/wireguard/{interface}.conf へ書き込み wg-quick で適用します (要 root 権限)</div>
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0;margin-top:6px;cursor:pointer">
@@ -460,6 +475,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
         <thead>
           <tr>
             <th>ポート</th>
+            <th>転送先</th>
             <th>クライアント公開鍵</th>
             <th>最終更新</th>
             <th style="width:130px"></th>
@@ -469,6 +485,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
           <?php foreach ($rows as $r): ?>
           <tr>
             <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
+            <td style="color:var(--muted)">→ :<?= (int)$r['dest_port'] ?: 80 ?></td>
             <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
             <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
             <td style="display:flex;gap:6px;align-items:center">
