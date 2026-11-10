@@ -4,7 +4,9 @@
 // =========================================================
 
 define('DB_PATH', __DIR__ . '/data/wg_portal.sqlite');
-define('ADMIN_SESSION_KEY', 'wg_admin_authed');
+// 同じドメインで複数のポータルを動かしても管理ログインを共有しないよう、
+// 設置ディレクトリごとに別のキーにする
+define('ADMIN_SESSION_KEY', 'wg_admin_authed_' . substr(hash('sha256', __DIR__), 0, 12));
 
 // ---- DB接続 (SQLite) ------------------------------------
 function get_db(): PDO {

@@ -428,7 +428,7 @@ HTTP から HTTPS に切り替えるとき、そのポートで別のサービ�
 -A POSTROUTING -o wg0 -m comment --comment wgportal -j MASQUERADE
 ```
 
-残留ルールの掃除（設定生成・削除・「設定適用」「停止」ボタンのたびに実行される）は、**このコメントを持つルールだけ**を対象にします。したがって、同じサブネット宛であっても管理者が手動で追加したルールは削除されません。
+残留ルールの掃除（設定生成・削除・「設定適用」「停止」ボタンのたびに実行される）は、**このコメントを持つルールだけ**を対象にします。したがって、同じサブネット宛であっても管理者が手動で追加したルールは削除されません。目印は設定 `rule_comment` で変えられます（「同じサーバーで検証用のポータルを動かす」を参照）。
 
 ```bash
 # ポータルが管理しているルールだけを一覧する
@@ -470,6 +470,55 @@ sudo iptables-save | grep wgportal      # ポータル製ルールにコメン�
 
 ---
 
+## 同じサーバーで検証用のポータルを動かす
+
+更新を本番に入れる前に、同じサーバーの別ディレクトリで実際の転送まで試せます。次の値を本番と分ければ、検証用ポータルの操作（設定適用・停止を含む）は本番のポートに影響しません。
+
+| 項目 | 設定のキー | 例 | 分ける理由 |
+|------|-----------|-----|-----------|
+| iptables ルールの目印 | `rule_comment` | `wgportal-test` | 掃除の対象は自分の目印のルールだけ |
+| WireGuard インターフェース名 | `wg_interface` | `wgtest` | 設定ファイルと `wg-quick down/up` の対象 |
+| WireGuard ポート (UDP) | `wg_port` | `51821` | 待ち受けの衝突 |
+| サブネット (IPv4 / IPv6) | `subnet` / `subnet_ipv6` | `10.0.99` / `fd00:99::` | 転送先アドレスの衝突 |
+| nginx 設定の置き場所 | `nginx_conf_dir` | `/etc/nginx/wgportal-test.d` | HTTPS 用ファイルの管理範囲 |
+| 許可ポート | `allowed_ports` | `19000-19009` | 本番で使っている公開ポートとの衝突 |
+
+`rule_comment` は管理画面にない設定です。ブラウザで開く前に、コマンドラインから他の値と一緒に設定してください（未設定の値は管理画面で変えられます）。
+
+```bash
+git clone -b <試すブランチ> https://github.com/bee7813993/wireguard-portal.git /path/to/wireguard-portal-test
+cd /path/to/wireguard-portal-test
+read -rsp '管理パスワード: ' PW; echo
+PW="$PW" php -r '
+require "config.php";
+set_setting("admin_pass", password_hash(getenv("PW"), PASSWORD_DEFAULT));
+foreach ([
+    "rule_comment"   => "wgportal-test",
+    "wg_interface"   => "wgtest",
+    "wg_port"        => "51821",
+    "subnet"         => "10.0.99",
+    "subnet_ipv6"    => "fd00:99::",
+    "nginx_conf_dir" => "/etc/nginx/wgportal-test.d",
+    "allowed_ports"  => "19000-19009",
+    "auto_apply"     => "0",
+] as $k => $v) set_setting($k, $v);
+echo "ok\n";'
+unset PW
+```
+
+そのあと:
+
+1. `data/` が外から読めないことを確認する（`curl -I https://<ホスト>/<検証用のパス>/data/wg_portal.sqlite` が 403 か 404）
+2. 管理画面で VPS の IP・NIC・HTTPS のホスト名などを本番と同じ値にし、準備ができたら自動適用を有効にする
+3. `sudo ufw allow 51821/udp`、HTTPS を試すなら許可ポートの TCP も開ける
+4. HTTPS を試す場合は「8. HTTPS 公開の準備」と同じ手順で検証用のディレクトリを作り、`include` 行を足す
+
+本番の許可ポートに検証用の範囲を含めないでください。両方が同じ公開ポートに DNAT を入れると、どちらが効くかが反映の順番で変わります。
+
+片付けるときは、検証用の管理画面で「WireGuard 停止 & iptables クリア」を押してからディレクトリを消し、`/etc/wireguard/wgtest.conf`、検証用の nginx ディレクトリと `include` 行を削除して nginx を再読み込みします。
+
+---
+
 ## セキュリティ注意事項
 
 - 管理画面のパスワードは初期値 `changeme` から**必ず変更**してください。
@@ -504,6 +553,8 @@ sudo iptables-save | grep wgportal      # ポータル製ルールにコメン�
 - 発行済みのポートをトップ画面から作り直せないようにした（設定変更画面を案内する）
 - 「IPv6 対応で全ポートを再適用」ボタンを「全ポートを再適用」に改称し、nginx 設定も反映するようにした
 - 利用者向け画面のスタイルを `portal.css` に分けた
+- iptables ルールの目印を設定 `rule_comment` で変えられるようにした（同じサーバーで検証用のポータルを動かすため）
+- 管理ログインを設置ディレクトリごとに分けた（同じドメインの別のポータルとログイン状態を共有しない）。更新後に一度ログインし直しが必要
 
 **備考**
 - 既存のポートはすべて HTTP（DNAT）のまま移行される。HTTPS を使わない場合、sudoers と nginx の変更は不要

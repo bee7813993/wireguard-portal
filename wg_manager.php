@@ -11,11 +11,21 @@ class WgManager {
     // 管理者が手動で追加したルールを巻き込まないようにする。
     // (空白を含まない語にすること: iptables -S の出力が引用符無しになり
     //  PostUp/PostDown 行との対応が崩れない)
+    // 同じサーバーで検証用のポータルを動かすときは、設定 rule_comment で
+    // 別の目印にする。目印が違えば互いのルールを消さない。
     private const RULE_COMMENT = 'wgportal';
+
+    private static function rule_comment(): string {
+        $c = get_setting('rule_comment') ?: self::RULE_COMMENT;
+        if (!preg_match('/^[A-Za-z0-9_-]{1,32}$/', $c)) {
+            throw new RuntimeException('設定 rule_comment が不正です (英数字・-・_ で 32 文字まで)。');
+        }
+        return $c;
+    }
 
     // ---- ルールに付与する comment match ------------------
     private static function comment_opt(): string {
-        return '-m comment --comment ' . self::RULE_COMMENT;
+        return '-m comment --comment ' . self::rule_comment();
     }
 
     // ---- インターフェース名バリデーション ---------------
@@ -308,7 +318,7 @@ class WgManager {
     private static function is_portal_rule(string $rule): bool {
         // iptables のバージョンによりコメントが引用符付きで出力される場合がある
         return (bool)preg_match(
-            '/--comment\s+"?' . preg_quote(self::RULE_COMMENT, '/') . '"?(\s|$)/',
+            '/--comment\s+"?' . preg_quote(self::rule_comment(), '/') . '"?(\s|$)/',
             $rule
         );
     }
@@ -336,6 +346,9 @@ class WgManager {
     // 形状が一致しないため残る。
     private static function flush_legacy_iptables(string $iface): void {
         if (get_setting('iptables_comment_migrated') === '1') return;
+        // 旧形式のルールを作ったのは既定の目印のポータルだけ
+        // (別の目印の検証用ポータルが本番の旧ルールを消さないように)
+        if (self::rule_comment() !== self::RULE_COMMENT) return;
 
         $q           = fn(string $s): string => preg_quote($s, '/');
         $nic         = get_setting('nic');
