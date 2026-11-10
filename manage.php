@@ -45,11 +45,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 'update':
-                $info = WgManager::port_info($port);
-                $mode = validate_proxy_mode($body['proxy_mode'] ?? $info['proxy_mode']);
-                $dest = validate_dest_port($body['dest_port'] ?? $info['dest_port']);
+                $info  = WgManager::port_info($port);
+                $mode  = validate_proxy_mode($body['proxy_mode'] ?? $info['proxy_mode']);
+                $dest  = validate_dest_port($body['dest_port'] ?? $info['dest_port']);
+                $owner = array_key_exists('owner_name', $body) ? validate_owner_name($body['owner_name']) : $info['owner_name'];
+                // 入力を全部確かめてから保存する (名前はサーバーへの反映が要らない)
+                $name_changed = WgManager::set_owner_name($port, $owner);
                 $res  = WgManager::update_port($port, $mode, $dest);
-                echo json_encode(['ok' => true, 'data' => $res + ['auto_apply' => get_setting('auto_apply') === '1']]);
+                echo json_encode(['ok' => true, 'data' => $res + [
+                    'name_changed' => $name_changed,
+                    'auto_apply'   => get_setting('auto_apply') === '1',
+                ]]);
                 break;
 
             case 'delete':
@@ -146,13 +152,21 @@ $prefill     = (int)($_GET['port'] ?? 0);
   <div class="card" id="manage-card" style="display:none">
     <dl class="info-list">
       <dt>ポート</dt>       <dd id="i-port"></dd>
+      <dt>お名前</dt>       <dd id="i-owner"></dd>
       <dt>公開 URL</dt>     <dd id="i-url"></dd>
       <dt>公開方式</dt>     <dd id="i-mode"></dd>
       <dt>転送先</dt>       <dd id="i-dest"></dd>
       <dt>最終更新</dt>     <dd id="i-updated"></dd>
     </dl>
 
-    <div class="section-head" style="margin-top:0">公開方式・転送先ポートの変更</div>
+    <div class="section-head" style="margin-top:0">設定の変更</div>
+    <div class="input-group">
+      <div class="input-wrap">
+        <label>お名前</label>
+        <input type="text" id="owner-input" maxlength="<?= OWNER_NAME_MAX ?>" autocomplete="off" placeholder="例: 山田">
+        <div class="field-hint">管理者が、誰のポートかを見分けるために使います (ほかの利用者には表示されません)。</div>
+      </div>
+    </div>
     <label class="field-label">公開方式</label>
     <div class="mode-group">
       <label class="mode-opt"><input type="radio" name="proxy_mode" value="dnat"> HTTP</label>
@@ -226,6 +240,8 @@ async function api(action, extra = {}) {
 
 function showInfo(d) {
   document.getElementById('i-port').textContent = d.port;
+  document.getElementById('i-owner').textContent = d.owner_name || '(未登録)';
+  document.getElementById('owner-input').value = d.owner_name;
   const url = document.getElementById('i-url');
   url.innerHTML = '';
   const a = document.createElement('a');
@@ -281,7 +297,12 @@ async function doUpdate() {
   const label = document.getElementById('save-label');
   const mode  = (document.querySelector('input[name="proxy_mode"]:checked') || {}).value;
   const dest  = parseInt(document.getElementById('dest-port-input').value, 10);
+  const owner = document.getElementById('owner-input').value.trim();
   resultEl.innerHTML = '';
+  if (!owner) {
+    resultEl.innerHTML = '<div class="del-err">お名前を入力してください。</div>';
+    return;
+  }
   if (!dest || dest < 1 || dest > 65535) {
     resultEl.innerHTML = '<div class="del-err">転送先ポートは 1〜65535 の範囲で入力してください。</div>';
     return;
@@ -290,10 +311,12 @@ async function doUpdate() {
   btn.disabled = true;
   label.innerHTML = '<span class="spinner"></span>';
   try {
-    const d = await api('update', { proxy_mode: mode, dest_port: dest });
+    const d = await api('update', { proxy_mode: mode, dest_port: dest, owner_name: owner });
     showInfo(d.info);
     if (!d.changed) {
-      resultEl.innerHTML = '<div class="del-ok">変更はありません。</div>';
+      resultEl.innerHTML = d.name_changed
+        ? '<div class="del-ok">保存しました。</div>'
+        : '<div class="del-ok">変更はありません。</div>';
     } else if (d.applied) {
       resultEl.innerHTML = applyHtml(d.applied);
     } else {

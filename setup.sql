@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS wg_configs (
     port        INTEGER NOT NULL UNIQUE,
     dest_port   INTEGER NOT NULL DEFAULT 80,
     proxy_mode  TEXT    NOT NULL DEFAULT 'dnat',
+    owner_name  TEXT    NOT NULL DEFAULT '',
     client_priv TEXT    NOT NULL,
     client_pub  TEXT    NOT NULL,
     server_priv TEXT    NOT NULL,

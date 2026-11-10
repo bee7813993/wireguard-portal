@@ -149,6 +149,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_m
     }
 }
 
+// ---- 登録者の名前の変更 ----------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_owner') {
+    $owner_port = (int)($_POST['owner_port'] ?? 0);
+    try {
+        $name = validate_owner_name($_POST['owner_name'] ?? '', false);
+        WgManager::set_owner_name($owner_port, $name);
+        $success = "ポート {$owner_port} の名前を保存しました。";
+    } catch (InvalidArgumentException $e) {
+        $error = $e->getMessage();
+    }
+}
+
 // ---- 管理トークンの発行 ----------------------------------
 $issued_token = null;  // [port, token] 一度だけ表示する
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_token') {
@@ -278,7 +290,7 @@ $listening_ports = get_listening_tcp_ports();
 if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
-$rows = get_db()->query("SELECT port, dest_port, proxy_mode, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
 $https_ready = WgManager::https_ready();
 
 // ---- ログ読み込み ----------------------------------------
@@ -381,8 +393,8 @@ tr:hover td{background:#fafbfc}
       <form method="post">
         <input type="hidden" name="action" value="save_settings">
         <div class="field">
-          <label>VPS グローバル IP</label>
-          <div class="desc">クライアントが接続する WireGuard サーバーの IP</div>
+          <label>VPS のアドレス (IP またはホスト名)</label>
+          <div class="desc">クライアントが接続する WireGuard サーバーの IP アドレスかホスト名。HTTP の公開 URL にも使います</div>
           <input type="text" name="vps_ip" value="<?= htmlspecialchars($cfg['vps_ip']) ?>" placeholder="203.0.113.1">
         </div>
         <div class="field">
@@ -445,11 +457,14 @@ tr:hover td{background:#fafbfc}
 
         <div class="divider"></div>
         <div class="section-title" style="margin-bottom:.5rem">HTTPS 公開 (nginx)</div>
-        <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。ホスト名が空のあいだ、利用者は HTTPS を選べません。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
+        <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。利用者が HTTPS を選べるのは、ホスト名が決まっていて (下の欄か、VPS のアドレスがホスト名のとき)、nginx 設定の置き場所のディレクトリがあるときです。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
+        <?php if (!WgManager::https_ready()): ?>
+        <div class="desc" style="color:#b45309;margin-bottom:1rem">現在、利用者は HTTPS を選べません (<?= WgManager::https_host() === '' ? 'ホスト名が決まっていません' : 'nginx 設定の置き場所 ' . htmlspecialchars($cfg['nginx_conf_dir']) . ' がありません' ?>)。</div>
+        <?php endif; ?>
         <div class="field">
           <label>HTTPS のホスト名</label>
-          <div class="desc">証明書のホスト名。公開 URL (https://ホスト名:ポート) と、PC へ渡す Host ヘッダーに使います</div>
-          <input type="text" name="https_host" value="<?= htmlspecialchars($cfg['https_host']) ?>" placeholder="portal.example.com">
+          <div class="desc">証明書のホスト名。公開 URL (https://ホスト名:ポート) と、PC へ渡す Host ヘッダーに使います。空欄なら、VPS のアドレスがホスト名のときはそれを使います<?= ($cfg['https_host'] === '' && WgManager::https_host() !== '') ? ' (現在: ' . htmlspecialchars(WgManager::https_host()) . ')' : '' ?></div>
+          <input type="text" name="https_host" value="<?= htmlspecialchars($cfg['https_host']) ?>" placeholder="<?= htmlspecialchars(WgManager::https_host() ?: 'portal.example.com') ?>">
         </div>
         <div class="field">
           <label>証明書のパス (省略可)</label>
@@ -591,6 +606,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
         <thead>
           <tr>
             <th>ポート</th>
+            <th>お名前</th>
             <th>方式</th>
             <th>転送先</th>
             <th>クライアント公開鍵</th>
@@ -603,6 +619,14 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
           <tr>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
             <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
+            <td>
+              <form method="post" style="display:flex;gap:6px;align-items:center">
+                <input type="hidden" name="action" value="set_owner">
+                <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
+                <input type="text" name="owner_name" value="<?= htmlspecialchars($r['owner_name'] ?? '') ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="未登録" style="width:9em;padding:5px 8px;font-size:12px;font-family:var(--sans)">
+                <button type="submit" class="conf-btn">保存</button>
+              </form>
+            </td>
             <td>
               <form method="post" style="display:flex;gap:6px;align-items:center;white-space:nowrap"
                     onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を <?= $is_https ? 'HTTP' : 'HTTPS' ?> に切り替えますか？')">
