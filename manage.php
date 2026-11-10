@@ -128,12 +128,12 @@ $prefill     = (int)($_GET['port'] ?? 0);
         <label>管理トークン</label>
         <input type="text" id="token-input" placeholder="設定生成時に表示されたトークン" autocomplete="off">
         <div class="error-msg" id="auth-error"></div>
+        <div class="field-hint">管理トークンを忘れた方は、管理者にご連絡ください（再発行すると古いトークンは使えなくなります）。</div>
       </div>
     </div>
     <button class="btn-generate" id="auth-btn" onclick="doOpen()">
       <span id="auth-label">開く</span>
     </button>
-    <p class="mode-note" style="margin-bottom:0">トークンをなくした場合は、管理者に再発行を依頼してください。</p>
   </div>
 
   <!-- 設定 -->
