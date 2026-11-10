@@ -416,6 +416,23 @@ class WgManager {
         return null;
     }
 
+    // ---- ピアごとの最終ハンドシェイク時刻 -----------------
+    // [公開鍵 => UNIX 時刻 (0 = まだ接続していない)]。
+    // インターフェースが止まっているなど取得できなければ null
+    public static function latest_handshakes(): ?array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+        $out = [];
+        exec('sudo wg show ' . escapeshellarg($iface) . ' latest-handshakes 2>/dev/null', $out, $rc);
+        if ($rc !== 0) return null;
+        $result = [];
+        foreach ($out as $line) {
+            if (preg_match('#^([A-Za-z0-9+/]{42,44}=?)\s+(\d+)$#', trim($line), $m)) {
+                $result[$m[1]] = (int)$m[2];
+            }
+        }
+        return $result;
+    }
+
     private static function is_interface_up(string $iface): bool {
         exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
         return $running === 0;

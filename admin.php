@@ -293,6 +293,23 @@ if ($listening_ports !== null) sort($listening_ports);
 $rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
 $https_ready = WgManager::https_ready();
 
+// ---- 最終接続 (WireGuard の最終ハンドシェイク) -------------
+$handshakes = WgManager::latest_handshakes();
+// [表示する文字列, 詳細 (ツールチップ), 最近つながっているか]
+function handshake_label(?array $hs, string $pub): array {
+    if ($hs === null) return ['—', 'WireGuard が止まっているか、状態を取得できません', false];
+    $ts = $hs[$pub] ?? null;
+    if ($ts === null) return ['—', 'サーバーの設定にまだ反映されていません', false];
+    if ($ts === 0)    return ['未接続', 'サーバーの起動後、まだ一度も接続していません', false];
+    $ago = max(0, time() - $ts);
+    $at  = date('Y-m-d H:i:s', $ts);
+    // 接続中はおおむね 2 分ごとにハンドシェイクする
+    if ($ago < 180)   return ['接続中', "最終ハンドシェイク: {$at}", true];
+    if ($ago < 3600)  return [intdiv($ago, 60) . ' 分前', $at, false];
+    if ($ago < 86400) return [intdiv($ago, 3600) . ' 時間前', $at, false];
+    return [date('Y-m-d H:i', $ts), $at, false];
+}
+
 // ---- ログ読み込み ----------------------------------------
 $log_path  = dirname(DB_PATH) . '/portal.log';
 $log_lines = [];
@@ -346,8 +363,8 @@ tr:last-child td{border-bottom:none}
 tr:hover td{background:#fafbfc}
 .ports-wrap{overflow-x:auto}
 .ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 10px}
-.ports td.ops{white-space:normal}
-.ops-wrap{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cell-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.cell-row{display:flex;gap:6px;align-items:center}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -614,6 +631,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
             <th>お名前</th>
             <th>方式</th>
             <th>転送先</th>
+            <th>最終接続</th>
             <th>最終更新</th>
             <th></th>
           </tr>
@@ -624,7 +642,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
             <td><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
             <td>
-              <form method="post" style="display:flex;gap:6px;align-items:center">
+              <form method="post" class="cell-stack">
                 <input type="hidden" name="action" value="set_owner">
                 <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
                 <input type="text" name="owner_name" value="<?= htmlspecialchars($r['owner_name'] ?? '') ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="未登録" style="width:7.5em;padding:5px 8px;font-size:12px;font-family:var(--sans)">
@@ -632,7 +650,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
               </form>
             </td>
             <td>
-              <form method="post" style="display:flex;gap:6px;align-items:center;white-space:nowrap"
+              <form method="post" class="cell-stack"
                     onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を <?= $is_https ? 'HTTP' : 'HTTPS' ?> に切り替えますか？')">
                 <input type="hidden" name="action" value="set_mode">
                 <input type="hidden" name="mode_port" value="<?= (int)$r['port'] ?>">
@@ -642,19 +660,23 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
               </form>
             </td>
             <td style="color:var(--muted)">:<?= (int)$r['dest_port'] ?: 80 ?></td>
+            <?php [$hs_text, $hs_title, $hs_live] = handshake_label($handshakes, (string)$r['client_pub']); ?>
+            <td title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
             <td style="color:var(--muted)" title="<?= htmlspecialchars($r['updated_at']) ?>"><?= htmlspecialchars(substr($r['updated_at'], 0, 16)) ?></td>
-            <td class="ops"><div class="ops-wrap">
-              <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
+            <td><div class="cell-stack">
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
                 <input type="hidden" name="action" value="reset_token">
                 <input type="hidden" name="tok_port" value="<?= (int)$r['port'] ?>">
                 <button type="submit" class="conf-btn"><?= empty($r['delete_token']) ? 'トークン発行' : 'トークン再発行' ?></button>
               </form>
+              <div class="cell-row">
+              <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を削除しますか？\nこの操作は元に戻せません。')">
                 <input type="hidden" name="action" value="delete_port">
                 <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
                 <button type="submit" class="del-btn">削除</button>
               </form>
+              </div>
             </div></td>
           </tr>
           <?php endforeach; ?>
