@@ -344,6 +344,10 @@ th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:500;backgrou
 td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#fafbfc}
+.ports-wrap{overflow-x:auto}
+.ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 10px}
+.ports td.ops{white-space:normal}
+.ops-wrap{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -602,28 +606,28 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
       <?php if (empty($rows)): ?>
         <p class="no-rows">まだ発行されていません</p>
       <?php else: ?>
-      <table>
+      <div class="ports-wrap">
+      <table class="ports">
         <thead>
           <tr>
             <th>ポート</th>
             <th>お名前</th>
             <th>方式</th>
             <th>転送先</th>
-            <th>クライアント公開鍵</th>
             <th>最終更新</th>
-            <th style="width:250px"></th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($rows as $r): ?>
           <tr>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
-            <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
+            <td><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
             <td>
               <form method="post" style="display:flex;gap:6px;align-items:center">
                 <input type="hidden" name="action" value="set_owner">
                 <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
-                <input type="text" name="owner_name" value="<?= htmlspecialchars($r['owner_name'] ?? '') ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="未登録" style="width:9em;padding:5px 8px;font-size:12px;font-family:var(--sans)">
+                <input type="text" name="owner_name" value="<?= htmlspecialchars($r['owner_name'] ?? '') ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="未登録" style="width:7.5em;padding:5px 8px;font-size:12px;font-family:var(--sans)">
                 <button type="submit" class="conf-btn">保存</button>
               </form>
             </td>
@@ -637,10 +641,9 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 <button type="submit" class="conf-btn" <?= (!$is_https && !$https_ready) ? 'disabled title="HTTPS 公開のホスト名が未設定です"' : '' ?>>→ <?= $is_https ? 'HTTP' : 'HTTPS' ?></button>
               </form>
             </td>
-            <td style="color:var(--muted)">→ :<?= (int)$r['dest_port'] ?: 80 ?></td>
-            <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
-            <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
-            <td style="display:flex;gap:6px;align-items:center">
+            <td style="color:var(--muted)">:<?= (int)$r['dest_port'] ?: 80 ?></td>
+            <td style="color:var(--muted)" title="<?= htmlspecialchars($r['updated_at']) ?>"><?= htmlspecialchars(substr($r['updated_at'], 0, 16)) ?></td>
+            <td class="ops"><div class="ops-wrap">
               <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
                 <input type="hidden" name="action" value="reset_token">
@@ -652,11 +655,12 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
                 <button type="submit" class="del-btn">削除</button>
               </form>
-            </td>
+            </div></td>
           </tr>
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
       <?php endif; ?>
     </div>
   </div>
