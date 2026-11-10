@@ -74,6 +74,21 @@ main {
   margin: 0 auto;
 }
 
+/* ---- カード右上の小さいボタン ---- */
+.card-tools { display: flex; justify-content: flex-end; gap: 6px; margin: -.75rem 0 .75rem; }
+.mini-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mini-btn:hover { color: var(--accent2); border-color: var(--accent2); }
+.mini-btn:disabled { opacity: .5; cursor: default; }
+
 /* ---- 管理者からのお知らせ ---- */
 .notice-box {
   width: 100%;

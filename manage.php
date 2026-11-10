@@ -152,6 +152,10 @@ $prefill     = (int)($_GET['port'] ?? 0);
 
   <!-- 設定 -->
   <div class="card" id="manage-card" style="display:none">
+    <div class="card-tools">
+      <button type="button" class="mini-btn" id="reload-btn" onclick="doReload()">↻ 最新の状態にする</button>
+      <button type="button" class="mini-btn" onclick="doClose()">閉じる</button>
+    </div>
     <dl class="info-list">
       <dt>ポート</dt>       <dd id="i-port"></dd>
       <dt>お名前</dt>       <dd id="i-owner"></dd>
@@ -226,6 +230,13 @@ $prefill     = (int)($_GET['port'] ?? 0);
 let cur = { port: 0, token: '' };
 let confText = '';
 
+// 開いたポートとトークンは、このタブを閉じるまでだけ覚えておく
+// (再読み込みしても開き直さなくて済むように。ほかのタブや次回には残らない)
+const STORE_KEY = 'wgportal_manage';
+function saveCur()  { try { sessionStorage.setItem(STORE_KEY, JSON.stringify(cur)); } catch (e) {} }
+function clearCur() { try { sessionStorage.removeItem(STORE_KEY); } catch (e) {} }
+function loadCur()  { try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; } }
+
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -290,14 +301,40 @@ async function doOpen() {
   label.innerHTML = '<span class="spinner"></span>';
   try {
     showInfo(await api('info'));
+    saveCur();
     document.getElementById('auth-card').style.display = 'none';
     document.getElementById('manage-card').style.display = 'block';
   } catch (e) {
+    clearCur();
     errEl.textContent = e.message;
   } finally {
     btn.disabled = false;
     label.textContent = '開く';
   }
+}
+
+async function doReload() {
+  const btn = document.getElementById('reload-btn');
+  btn.disabled = true;
+  try {
+    showInfo(await api('info'));
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function doClose() {
+  clearCur();
+  cur = { port: 0, token: '' };
+  confText = '';
+  document.getElementById('token-input').value = '';
+  document.getElementById('conf-area').style.display = 'none';
+  document.getElementById('save-btn').disabled = false;
+  ['save-result', 'del-result'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+  document.getElementById('manage-card').style.display = 'none';
+  document.getElementById('auth-card').style.display = 'block';
 }
 
 async function doUpdate() {
@@ -382,6 +419,7 @@ async function doDelete() {
   try {
     await api('delete');
     resultEl.innerHTML = `<div class="del-ok">ポート ${cur.port} の設定を削除しました。</div>`;
+    clearCur();
     document.getElementById('save-btn').disabled = true;
   } catch (e) {
     resultEl.innerHTML = `<div class="del-err">${escHtml(e.message)}</div>`;
@@ -394,6 +432,18 @@ async function doDelete() {
 ['port-input', 'token-input'].forEach(id => {
   document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') doOpen(); });
 });
+
+// 再読み込みしたときは、覚えておいたポートで開き直す
+// (URL の ?port= が別のポートを指しているときは開き直さない)
+(function () {
+  const saved = loadCur();
+  if (!saved || !saved.port || !saved.token) return;
+  const urlPort = parseInt(new URLSearchParams(location.search).get('port') || '0', 10);
+  if (urlPort && urlPort !== saved.port) { clearCur(); return; }
+  document.getElementById('port-input').value  = saved.port;
+  document.getElementById('token-input').value = saved.token;
+  doOpen();
+})();
 </script>
 </body>
 </html>
