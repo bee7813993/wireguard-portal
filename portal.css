@@ -74,6 +74,38 @@ main {
   margin: 0 auto;
 }
 
+/* ---- 発行済みの利用者向けの入口 ---- */
+.manage-entry {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent2);
+  border-radius: 14px;
+  padding: 1rem 1.25rem;
+  box-shadow: var(--shadow2);
+}
+.manage-entry-text strong { display: block; font-size: 14px; font-weight: 500; color: var(--text); }
+.manage-entry-text span   { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.manage-entry-btn {
+  display: inline-block;
+  padding: .6rem 1rem;
+  border: 1.5px solid var(--accent2);
+  border-radius: 8px;
+  color: var(--accent2);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.manage-entry-btn:hover { background: #e0f2fe; }
+
 /* ---- Guide ---- */
 .guide {
   width: 100%;

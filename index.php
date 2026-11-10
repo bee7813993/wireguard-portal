@@ -40,6 +40,15 @@ $https_note   = get_setting('https_note');
     <p>自宅・社内の PC で動いている Web サーバーを VPN 経由でインターネットに安全に公開できます。</p>
   </div>
 
+  <!-- 発行済みの利用者向けの入口 -->
+  <div class="manage-entry">
+    <div class="manage-entry-text">
+      <strong>発行済みのポートがある方</strong>
+      <span>公開方式の変更・設定ファイルの再取得<?= $delete_mode !== 'admin' ? '・削除' : '' ?>はこちら</span>
+    </div>
+    <a class="manage-entry-btn" href="manage.php">設定変更画面を開く →</a>
+  </div>
+
   <!-- 使い方ガイド -->
   <div class="guide">
     <div class="guide-title">使い方</div>
@@ -251,7 +260,7 @@ $https_note   = get_setting('https_note');
 </main>
 
 <footer>
-  <a href="manage.php">設定変更</a> &nbsp;·&nbsp; <a href="admin.php">管理画面</a>
+  <a href="admin.php">管理画面</a>
 </footer>
 
 <script>
