@@ -132,7 +132,7 @@ $notice       = get_setting('notice');
     </div>
     <div class="mode-note">
       <?php if ($https_ready): ?>
-        HTTPS: <?= message_html($https_note) ?><br>
+        <?= message_html($https_note) ?><br>
         方式はあとから設定変更画面で切り替えられます (鍵は変わりません)。
       <?php else: ?>
         HTTPS 公開は管理者が設定していないため選べません。

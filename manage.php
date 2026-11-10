@@ -162,7 +162,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
     </div>
     <div class="mode-note">
       <?php if ($https_ready): ?>
-        HTTPS: <?= message_html($https_note) ?><br>
+        <?= message_html($https_note) ?><br>
       <?php else: ?>
         HTTPS 公開は管理者が設定していないため選べません。<br>
       <?php endif; ?>
