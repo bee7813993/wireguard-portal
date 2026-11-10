@@ -18,7 +18,7 @@ $notice       = get_setting('notice');
 <title>WireGuard Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="portal.css">
+<link rel="stylesheet" href="portal.css?v=<?= (int)@filemtime(__DIR__ . '/portal.css') ?>">
 </head>
 <body>
 
@@ -63,8 +63,8 @@ $notice       = get_setting('notice');
       <div class="guide-step">
         <span class="guide-num">1</span>
         <div>
-          <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
-          <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります<?php if ($https_ready): ?> (HTTPS を選んだ場合は https://<?= htmlspecialchars(get_setting('https_host')) ?>:11090)<?php endif; ?></div>
+          <div class="guide-text"><em>お名前</em> と、公開したい <em>外部ポート番号</em> を入力する</div>
+          <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります<?php if ($https_ready): ?> (HTTPS を選んだ場合は https://<?= htmlspecialchars(WgManager::https_host()) ?>:11090)<?php endif; ?></div>
           <div class="guide-sub">※ サーバー上で使用中のポートなど、指定できないポート番号があります。エラーになった場合は別の番号をお試しください</div>
           <div class="guide-sub">※ PC 側で待ち受けているポートが 80 以外の場合は <em>転送先ポート</em> も変更してください</div>
         </div>
@@ -104,6 +104,15 @@ $notice       = get_setting('notice');
     <div class="warn-box">
       <span class="warn-icon">⚠</span>
       <span>発行済みのポートの公開方式の変更や設定ファイルの再取得は、<a class="sub-link" href="manage.php">設定変更画面</a>から<strong>管理トークン</strong>を使って行います。</span>
+    </div>
+
+    <div class="input-group">
+      <div class="input-wrap">
+        <label>お名前</label>
+        <input type="text" id="owner-input" maxlength="<?= OWNER_NAME_MAX ?>" autocomplete="name" placeholder="例: 山田">
+        <div class="error-msg" id="owner-error"></div>
+        <div class="field-hint">管理者が、誰のポートかを見分けるために使います (ほかの利用者には表示されません)。</div>
+      </div>
     </div>
 
     <div class="input-group">
@@ -287,11 +296,22 @@ async function doGenerate() {
   const port      = parseInt(input.value, 10);
   const destPort  = parseInt(destInput.value, 10);
   const proxyMode = (document.querySelector('input[name="proxy_mode"]:checked') || {}).value || 'dnat';
+  const ownerInput = document.getElementById('owner-input');
+  const ownerErrEl = document.getElementById('owner-error');
+  const ownerName  = ownerInput.value.trim();
 
-  errEl.textContent     = '';
-  destErrEl.textContent = '';
+  errEl.textContent      = '';
+  destErrEl.textContent  = '';
+  ownerErrEl.textContent = '';
   input.classList.remove('error');
   destInput.classList.remove('error');
+  ownerInput.classList.remove('error');
+
+  if (!ownerName) {
+    ownerErrEl.textContent = 'お名前を入力してください。';
+    ownerInput.classList.add('error');
+    return;
+  }
 
   if (!input.value || isNaN(port) || port < 1024 || port > 65535) {
     errEl.textContent = '1024〜65535 の範囲で入力してください。';
@@ -312,11 +332,16 @@ async function doGenerate() {
     const res  = await fetch('generate.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port, dest_port: destPort, proxy_mode: proxyMode })
+      body: JSON.stringify({ port, dest_port: destPort, proxy_mode: proxyMode, owner_name: ownerName })
     });
     const json = await res.json();
 
     if (!res.ok || !json.ok) {
+      if ((json.error || '').startsWith('お名前')) {
+        ownerErrEl.textContent = json.error;
+        ownerInput.classList.add('error');
+        return;
+      }
       errEl.textContent = json.error || 'エラーが発生しました。';
       if (json.manage) {
         const a = document.createElement('a');

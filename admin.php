@@ -149,6 +149,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_m
     }
 }
 
+// ---- 登録者の名前の変更 ----------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_owner') {
+    $owner_port = (int)($_POST['owner_port'] ?? 0);
+    try {
+        $name = validate_owner_name($_POST['owner_name'] ?? '', false);
+        WgManager::set_owner_name($owner_port, $name);
+        $success = "ポート {$owner_port} の名前を保存しました。";
+    } catch (InvalidArgumentException $e) {
+        $error = $e->getMessage();
+    }
+}
+
 // ---- 管理トークンの発行 ----------------------------------
 $issued_token = null;  // [port, token] 一度だけ表示する
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_token') {
@@ -278,8 +290,12 @@ $listening_ports = get_listening_tcp_ports();
 if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
-$rows = get_db()->query("SELECT port, dest_port, proxy_mode, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
 $https_ready = WgManager::https_ready();
+
+// ---- 最終接続 (WireGuard の最終ハンドシェイク) -------------
+$handshakes = WgManager::latest_handshakes();
+
 
 // ---- ログ読み込み ----------------------------------------
 $log_path  = dirname(DB_PATH) . '/portal.log';
@@ -332,6 +348,19 @@ th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:500;backgrou
 td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);word-break:break-all;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#fafbfc}
+.ports-wrap{overflow-x:auto}
+.ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 10px}
+.cell-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.cell-row{display:flex;gap:6px;align-items:center}
+.name-edit{display:flex;align-items:center;gap:4px}
+.name-view,.name-input{display:flex;align-items:center;gap:4px}
+.name-view[hidden],.name-input[hidden]{display:none}
+.name-text{font-family:var(--sans);font-size:13px;color:var(--text)}
+.name-text.empty{color:var(--muted);font-size:12px}
+.icon-btn{width:26px;height:26px;display:inline-grid;place-items:center;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.icon-btn:hover{background:#f1f5f9;border-color:var(--border2);color:var(--text)}
+.icon-btn.ok{color:var(--accent);border-color:#a7f3d0}
+.icon-btn.ok:hover{background:#ecfdf5;border-color:var(--accent)}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -381,8 +410,8 @@ tr:hover td{background:#fafbfc}
       <form method="post">
         <input type="hidden" name="action" value="save_settings">
         <div class="field">
-          <label>VPS グローバル IP</label>
-          <div class="desc">クライアントが接続する WireGuard サーバーの IP</div>
+          <label>VPS のアドレス (IP またはホスト名)</label>
+          <div class="desc">クライアントが接続する WireGuard サーバーの IP アドレスかホスト名。HTTP の公開 URL にも使います</div>
           <input type="text" name="vps_ip" value="<?= htmlspecialchars($cfg['vps_ip']) ?>" placeholder="203.0.113.1">
         </div>
         <div class="field">
@@ -445,11 +474,14 @@ tr:hover td{background:#fafbfc}
 
         <div class="divider"></div>
         <div class="section-title" style="margin-bottom:.5rem">HTTPS 公開 (nginx)</div>
-        <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。ホスト名が空のあいだ、利用者は HTTPS を選べません。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
+        <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。利用者が HTTPS を選べるのは、ホスト名が決まっていて (下の欄か、VPS のアドレスがホスト名のとき)、nginx 設定の置き場所のディレクトリがあるときです。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
+        <?php if (!WgManager::https_ready()): ?>
+        <div class="desc" style="color:#b45309;margin-bottom:1rem">現在、利用者は HTTPS を選べません (<?= WgManager::https_host() === '' ? 'ホスト名が決まっていません' : 'nginx 設定の置き場所 ' . htmlspecialchars($cfg['nginx_conf_dir']) . ' がありません' ?>)。</div>
+        <?php endif; ?>
         <div class="field">
           <label>HTTPS のホスト名</label>
-          <div class="desc">証明書のホスト名。公開 URL (https://ホスト名:ポート) と、PC へ渡す Host ヘッダーに使います</div>
-          <input type="text" name="https_host" value="<?= htmlspecialchars($cfg['https_host']) ?>" placeholder="portal.example.com">
+          <div class="desc">証明書のホスト名。公開 URL (https://ホスト名:ポート) と、PC へ渡す Host ヘッダーに使います。空欄なら、VPS のアドレスがホスト名のときはそれを使います<?= ($cfg['https_host'] === '' && WgManager::https_host() !== '') ? ' (現在: ' . htmlspecialchars(WgManager::https_host()) . ')' : '' ?></div>
+          <input type="text" name="https_host" value="<?= htmlspecialchars($cfg['https_host']) ?>" placeholder="<?= htmlspecialchars(WgManager::https_host() ?: 'portal.example.com') ?>">
         </div>
         <div class="field">
           <label>証明書のパス (省略可)</label>
@@ -587,24 +619,42 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
       <?php if (empty($rows)): ?>
         <p class="no-rows">まだ発行されていません</p>
       <?php else: ?>
-      <table>
+      <div class="ports-wrap">
+      <table class="ports">
         <thead>
           <tr>
             <th>ポート</th>
+            <th>お名前</th>
             <th>方式</th>
             <th>転送先</th>
-            <th>クライアント公開鍵</th>
+            <th>最終接続</th>
             <th>最終更新</th>
-            <th style="width:250px"></th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($rows as $r): ?>
           <tr>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
-            <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
+            <td><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
             <td>
-              <form method="post" style="display:flex;gap:6px;align-items:center;white-space:nowrap"
+              <?php $owner = (string)($r['owner_name'] ?? ''); ?>
+              <form method="post" class="name-edit">
+                <input type="hidden" name="action" value="set_owner">
+                <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
+                <span class="name-view">
+                  <span class="name-text<?= $owner === '' ? ' empty' : '' ?>"><?= $owner === '' ? '未登録' : htmlspecialchars($owner) ?></span>
+                  <button type="button" class="icon-btn" title="名前を編集" aria-label="名前を編集" onclick="editName(this)">✎</button>
+                </span>
+                <span class="name-input" hidden>
+                  <input type="text" name="owner_name" value="<?= htmlspecialchars($owner) ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="名前" style="width:8em;padding:4px 8px;font-size:12px;font-family:var(--sans)" onkeydown="if (event.key === 'Escape') cancelName(this)">
+                  <button type="submit" class="icon-btn ok" title="保存 (Enter)" aria-label="保存">✓</button>
+                  <button type="button" class="icon-btn" title="やめる (Esc)" aria-label="やめる" onclick="cancelName(this)">✕</button>
+                </span>
+              </form>
+            </td>
+            <td>
+              <form method="post" class="cell-stack"
                     onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を <?= $is_https ? 'HTTP' : 'HTTPS' ?> に切り替えますか？')">
                 <input type="hidden" name="action" value="set_mode">
                 <input type="hidden" name="mode_port" value="<?= (int)$r['port'] ?>">
@@ -613,26 +663,30 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 <button type="submit" class="conf-btn" <?= (!$is_https && !$https_ready) ? 'disabled title="HTTPS 公開のホスト名が未設定です"' : '' ?>>→ <?= $is_https ? 'HTTP' : 'HTTPS' ?></button>
               </form>
             </td>
-            <td style="color:var(--muted)">→ :<?= (int)$r['dest_port'] ?: 80 ?></td>
-            <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
-            <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
-            <td style="display:flex;gap:6px;align-items:center">
-              <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
+            <td style="color:var(--muted)">:<?= (int)$r['dest_port'] ?: 80 ?></td>
+            <?php ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub']); ?>
+            <td title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
+            <td style="color:var(--muted)" title="<?= htmlspecialchars($r['updated_at']) ?>"><?= htmlspecialchars(substr($r['updated_at'], 0, 16)) ?></td>
+            <td><div class="cell-stack">
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
                 <input type="hidden" name="action" value="reset_token">
                 <input type="hidden" name="tok_port" value="<?= (int)$r['port'] ?>">
                 <button type="submit" class="conf-btn"><?= empty($r['delete_token']) ? 'トークン発行' : 'トークン再発行' ?></button>
               </form>
+              <div class="cell-row">
+              <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を削除しますか？\nこの操作は元に戻せません。')">
                 <input type="hidden" name="action" value="delete_port">
                 <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
                 <button type="submit" class="del-btn">削除</button>
               </form>
-            </td>
+              </div>
+            </div></td>
           </tr>
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
       <?php endif; ?>
     </div>
   </div>
@@ -678,6 +732,23 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
 </div>
 
 <script>
+// ---- ポート一覧: 名前の編集 (鉛筆で入力欄に切り替え、Enter か ✓ で保存) ----
+function editName(btn) {
+  const form  = btn.closest('form');
+  const input = form.querySelector('input[name="owner_name"]');
+  input.dataset.orig = input.value;
+  form.querySelector('.name-view').hidden  = true;
+  form.querySelector('.name-input').hidden = false;
+  input.focus();
+  input.select();
+}
+function cancelName(el) {
+  const form  = el.closest('form');
+  const input = form.querySelector('input[name="owner_name"]');
+  input.value = input.dataset.orig ?? input.value;
+  form.querySelector('.name-input').hidden = true;
+  form.querySelector('.name-view').hidden  = false;
+}
 let _confText = '';
 let _confPort = 0;
 

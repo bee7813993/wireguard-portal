@@ -29,6 +29,7 @@ function get_db(): PDO {
             port         INTEGER NOT NULL UNIQUE,
             dest_port    INTEGER NOT NULL DEFAULT 80,
             proxy_mode   TEXT    NOT NULL DEFAULT 'dnat',
+            owner_name   TEXT    NOT NULL DEFAULT '',
             client_priv  TEXT    NOT NULL,
             client_pub   TEXT    NOT NULL,
             server_priv  TEXT    NOT NULL,
@@ -56,6 +57,10 @@ function get_db(): PDO {
     // 旧レコードはすべて DNAT だったため既定値も dnat
     if (!in_array('proxy_mode', $cols, true)) {
         $pdo->exec("ALTER TABLE wg_configs ADD COLUMN proxy_mode TEXT NOT NULL DEFAULT 'dnat'");
+    }
+    // 登録した人の名前 (管理画面の一覧で誰のポートかを見分けるため)。旧レコードは空
+    if (!in_array('owner_name', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''");
     }
 
     // デフォルト設定を挿入 (初回のみ)
@@ -184,6 +189,21 @@ function validate_dest_port(mixed $port): int {
         throw new InvalidArgumentException('転送先ポート番号は 1〜65535 の範囲で指定してください。');
     }
     return $p;
+}
+
+// ---- 登録者の名前バリデーション ------------------------
+// 制御文字と連続する空白をまとめ、40 文字まで。$required なら空を拒否
+const OWNER_NAME_MAX = 40;
+
+function validate_owner_name(mixed $name, bool $required = true): string {
+    $n = trim(preg_replace('/[\p{C}\s]+/u', ' ', (string)$name) ?? '');
+    if ($required && $n === '') {
+        throw new InvalidArgumentException('お名前を入力してください。');
+    }
+    if (preg_match_all('/./us', $n) > OWNER_NAME_MAX) {
+        throw new InvalidArgumentException('お名前は ' . OWNER_NAME_MAX . ' 文字以内で入力してください。');
+    }
+    return $n;
 }
 
 // ---- 公開方式バリデーション ----------------------------

@@ -37,7 +37,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         switch ($action) {
             case 'info':
-                echo json_encode(['ok' => true, 'data' => WgManager::port_info($port)]);
+                echo json_encode(['ok' => true, 'data' => WgManager::port_info($port) + [
+                    'connection' => WgManager::port_connection($port),
+                ]]);
                 break;
 
             case 'conf':
@@ -45,11 +47,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 'update':
-                $info = WgManager::port_info($port);
-                $mode = validate_proxy_mode($body['proxy_mode'] ?? $info['proxy_mode']);
-                $dest = validate_dest_port($body['dest_port'] ?? $info['dest_port']);
+                $info  = WgManager::port_info($port);
+                $mode  = validate_proxy_mode($body['proxy_mode'] ?? $info['proxy_mode']);
+                $dest  = validate_dest_port($body['dest_port'] ?? $info['dest_port']);
+                $owner = array_key_exists('owner_name', $body) ? validate_owner_name($body['owner_name']) : $info['owner_name'];
+                // 入力を全部確かめてから保存する (名前はサーバーへの反映が要らない)
+                $name_changed = WgManager::set_owner_name($port, $owner);
                 $res  = WgManager::update_port($port, $mode, $dest);
-                echo json_encode(['ok' => true, 'data' => $res + ['auto_apply' => get_setting('auto_apply') === '1']]);
+                echo json_encode(['ok' => true, 'data' => $res + [
+                    'name_changed' => $name_changed,
+                    'auto_apply'   => get_setting('auto_apply') === '1',
+                ]]);
                 break;
 
             case 'delete':
@@ -92,7 +100,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
 <title>設定変更 – WireGuard Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="portal.css">
+<link rel="stylesheet" href="portal.css?v=<?= (int)@filemtime(__DIR__ . '/portal.css') ?>">
 </head>
 <body>
 
@@ -144,15 +152,28 @@ $prefill     = (int)($_GET['port'] ?? 0);
 
   <!-- 設定 -->
   <div class="card" id="manage-card" style="display:none">
+    <div class="card-tools">
+      <button type="button" class="mini-btn" id="reload-btn" onclick="doReload()">↻ 最新の状態にする</button>
+      <button type="button" class="mini-btn plain" onclick="doClose()">閉じる</button>
+    </div>
     <dl class="info-list">
       <dt>ポート</dt>       <dd id="i-port"></dd>
+      <dt>お名前</dt>       <dd id="i-owner"></dd>
       <dt>公開 URL</dt>     <dd id="i-url"></dd>
       <dt>公開方式</dt>     <dd id="i-mode"></dd>
       <dt>転送先</dt>       <dd id="i-dest"></dd>
+      <dt>最終接続</dt>     <dd id="i-conn"></dd>
       <dt>最終更新</dt>     <dd id="i-updated"></dd>
     </dl>
 
-    <div class="section-head" style="margin-top:0">公開方式・転送先ポートの変更</div>
+    <div class="section-head" style="margin-top:0">設定の変更</div>
+    <div class="input-group">
+      <div class="input-wrap">
+        <label>お名前</label>
+        <input type="text" id="owner-input" maxlength="<?= OWNER_NAME_MAX ?>" autocomplete="off" placeholder="例: 山田">
+        <div class="field-hint">管理者が、誰のポートかを見分けるために使います (ほかの利用者には表示されません)。</div>
+      </div>
+    </div>
     <label class="field-label">公開方式</label>
     <div class="mode-group">
       <label class="mode-opt"><input type="radio" name="proxy_mode" value="dnat"> HTTP</label>
@@ -209,6 +230,13 @@ $prefill     = (int)($_GET['port'] ?? 0);
 let cur = { port: 0, token: '' };
 let confText = '';
 
+// 開いたポートとトークンは、このタブを閉じるまでだけ覚えておく
+// (再読み込みしても開き直さなくて済むように。ほかのタブや次回には残らない)
+const STORE_KEY = 'wgportal_manage';
+function saveCur()  { try { sessionStorage.setItem(STORE_KEY, JSON.stringify(cur)); } catch (e) {} }
+function clearCur() { try { sessionStorage.removeItem(STORE_KEY); } catch (e) {} }
+function loadCur()  { try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; } }
+
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -226,6 +254,8 @@ async function api(action, extra = {}) {
 
 function showInfo(d) {
   document.getElementById('i-port').textContent = d.port;
+  document.getElementById('i-owner').textContent = d.owner_name || '(未登録)';
+  document.getElementById('owner-input').value = d.owner_name;
   const url = document.getElementById('i-url');
   url.innerHTML = '';
   const a = document.createElement('a');
@@ -236,6 +266,12 @@ function showInfo(d) {
     ? '<span class="mode-badge https">HTTPS</span>' : '<span class="mode-badge">HTTP</span>';
   document.getElementById('i-dest').textContent = `PC (${d.client_ip}) のポート ${d.dest_port}`;
   document.getElementById('i-updated').textContent = d.updated_at;
+  if (d.connection) {
+    const c = document.getElementById('i-conn');
+    c.textContent = (d.connection.live ? '● ' : '') + d.connection.text;
+    c.title = d.connection.title;
+    c.style.color = d.connection.live ? 'var(--accent)' : '';
+  }
 
   const radio = document.querySelector(`input[name="proxy_mode"][value="${d.proxy_mode}"]`);
   if (radio) radio.checked = true;
@@ -265,14 +301,40 @@ async function doOpen() {
   label.innerHTML = '<span class="spinner"></span>';
   try {
     showInfo(await api('info'));
+    saveCur();
     document.getElementById('auth-card').style.display = 'none';
     document.getElementById('manage-card').style.display = 'block';
   } catch (e) {
+    clearCur();
     errEl.textContent = e.message;
   } finally {
     btn.disabled = false;
     label.textContent = '開く';
   }
+}
+
+async function doReload() {
+  const btn = document.getElementById('reload-btn');
+  btn.disabled = true;
+  try {
+    showInfo(await api('info'));
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function doClose() {
+  clearCur();
+  cur = { port: 0, token: '' };
+  confText = '';
+  document.getElementById('token-input').value = '';
+  document.getElementById('conf-area').style.display = 'none';
+  document.getElementById('save-btn').disabled = false;
+  ['save-result', 'del-result'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+  document.getElementById('manage-card').style.display = 'none';
+  document.getElementById('auth-card').style.display = 'block';
 }
 
 async function doUpdate() {
@@ -281,7 +343,12 @@ async function doUpdate() {
   const label = document.getElementById('save-label');
   const mode  = (document.querySelector('input[name="proxy_mode"]:checked') || {}).value;
   const dest  = parseInt(document.getElementById('dest-port-input').value, 10);
+  const owner = document.getElementById('owner-input').value.trim();
   resultEl.innerHTML = '';
+  if (!owner) {
+    resultEl.innerHTML = '<div class="del-err">お名前を入力してください。</div>';
+    return;
+  }
   if (!dest || dest < 1 || dest > 65535) {
     resultEl.innerHTML = '<div class="del-err">転送先ポートは 1〜65535 の範囲で入力してください。</div>';
     return;
@@ -290,10 +357,12 @@ async function doUpdate() {
   btn.disabled = true;
   label.innerHTML = '<span class="spinner"></span>';
   try {
-    const d = await api('update', { proxy_mode: mode, dest_port: dest });
+    const d = await api('update', { proxy_mode: mode, dest_port: dest, owner_name: owner });
     showInfo(d.info);
     if (!d.changed) {
-      resultEl.innerHTML = '<div class="del-ok">変更はありません。</div>';
+      resultEl.innerHTML = d.name_changed
+        ? '<div class="del-ok">保存しました。</div>'
+        : '<div class="del-ok">変更はありません。</div>';
     } else if (d.applied) {
       resultEl.innerHTML = applyHtml(d.applied);
     } else {
@@ -350,6 +419,7 @@ async function doDelete() {
   try {
     await api('delete');
     resultEl.innerHTML = `<div class="del-ok">ポート ${cur.port} の設定を削除しました。</div>`;
+    clearCur();
     document.getElementById('save-btn').disabled = true;
   } catch (e) {
     resultEl.innerHTML = `<div class="del-err">${escHtml(e.message)}</div>`;
@@ -362,6 +432,18 @@ async function doDelete() {
 ['port-input', 'token-input'].forEach(id => {
   document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') doOpen(); });
 });
+
+// 再読み込みしたときは、覚えておいたポートで開き直す
+// (URL の ?port= が別のポートを指しているときは開き直さない)
+(function () {
+  const saved = loadCur();
+  if (!saved || !saved.port || !saved.token) return;
+  const urlPort = parseInt(new URLSearchParams(location.search).get('port') || '0', 10);
+  if (urlPort && urlPort !== saved.port) { clearCur(); return; }
+  document.getElementById('port-input').value  = saved.port;
+  document.getElementById('token-input').value = saved.token;
+  doOpen();
+})();
 </script>
 </body>
 </html>

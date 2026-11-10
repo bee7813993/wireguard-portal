@@ -416,6 +416,48 @@ class WgManager {
         return null;
     }
 
+    // ---- ピアごとの最終ハンドシェイク時刻 -----------------
+    // [公開鍵 => UNIX 時刻 (0 = まだ接続していない)]。
+    // インターフェースが止まっているなど取得できなければ null
+    public static function latest_handshakes(): ?array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+        $out = [];
+        exec('sudo wg show ' . escapeshellarg($iface) . ' latest-handshakes 2>/dev/null', $out, $rc);
+        if ($rc !== 0) return null;
+        $result = [];
+        foreach ($out as $line) {
+            if (preg_match('#^([A-Za-z0-9+/]{42,44}=?)\s+(\d+)$#', trim($line), $m)) {
+                $result[$m[1]] = (int)$m[2];
+            }
+        }
+        return $result;
+    }
+
+    // ---- 最終接続の表示 -----------------------------------
+    // ['text' => 表示, 'title' => 詳細, 'live' => 最近つながっているか]
+    // 切断の通知はないため、最後のハンドシェイクから 3 分以内を「接続中」とする
+    // (接続中はおおむね 2 分ごとにハンドシェイクする)
+    public static function connection_label(?array $hs, string $pub): array {
+        $make = fn(string $text, string $title, bool $live = false) => ['text' => $text, 'title' => $title, 'live' => $live];
+        if ($hs === null) return $make('—', 'WireGuard が止まっているか、状態を取得できません');
+        $ts = $hs[$pub] ?? null;
+        if ($ts === null) return $make('—', 'サーバーの設定にまだ反映されていません');
+        if ($ts === 0)    return $make('未接続', 'サーバーの起動後、まだ一度も接続していません');
+        $ago = max(0, time() - $ts);
+        $at  = date('Y-m-d H:i:s', $ts);
+        if ($ago < 180)   return $make('接続中', "最終ハンドシェイク: {$at}", true);
+        if ($ago < 3600)  return $make(intdiv($ago, 60) . ' 分前', $at);
+        if ($ago < 86400) return $make(intdiv($ago, 3600) . ' 時間前', $at);
+        return $make(date('Y-m-d H:i', $ts), $at);
+    }
+
+    // 1 ポート分の最終接続
+    public static function port_connection(int $port): ?array {
+        $row = self::find_row($port);
+        if (!$row) return null;
+        return self::connection_label(self::latest_handshakes(), (string)$row['client_pub']);
+    }
+
     private static function is_interface_up(string $iface): bool {
         exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
         return $running === 0;
@@ -493,14 +535,35 @@ class WgManager {
     //  HTTPS 公開 (nginx)
     // =====================================================
 
-    // HTTPS 公開に必要な設定 (ホスト名) が管理画面で入力済みか
+    // HTTPS 公開に使うホスト名。管理画面で空欄なら、VPS のアドレスが
+    // ホスト名 (IP アドレスでない) のときはそれを使う
+    public static function https_host(): string {
+        $host = get_setting('https_host');
+        if ($host !== '') return $host;
+        $vps = trim(get_setting('vps_ip'));
+        if ($vps === '' || filter_var($vps, FILTER_VALIDATE_IP) !== false || !str_contains($vps, '.')) return '';
+        try {
+            return validate_hostname($vps);
+        } catch (InvalidArgumentException $e) {
+            return '';
+        }
+    }
+
+    // HTTPS を選べるか: ホスト名が決まっていて、nginx 設定の置き場所がある
+    // (置き場所は README の「HTTPS 公開の準備」で作る。HTTPS を使わない
+    //  環境では作らないので、VPS のアドレスがホスト名でも選べるようにならない)
     public static function https_ready(): bool {
-        return get_setting('https_host') !== '';
+        if (self::https_host() === '') return false;
+        try {
+            return is_dir(self::nginx_conf_dir());
+        } catch (InvalidArgumentException $e) {
+            return false;
+        }
     }
 
     // [証明書, 秘密鍵] のパス。未入力なら Let's Encrypt の標準の場所
     public static function https_cert_paths(): array {
-        $host = get_setting('https_host');
+        $host = self::https_host();
         return [
             get_setting('https_cert')     ?: "/etc/letsencrypt/live/{$host}/fullchain.pem",
             get_setting('https_cert_key') ?: "/etc/letsencrypt/live/{$host}/privkey.pem",
@@ -510,7 +573,7 @@ class WgManager {
     // 外部から見た公開 URL
     public static function public_url(int $port, string $mode): string {
         if ($mode === 'https') {
-            return 'https://' . get_setting('https_host') . ':' . $port . '/';
+            return 'https://' . self::https_host() . ':' . $port . '/';
         }
         $ip = get_setting('vps_ip');
         if (str_contains($ip, ':')) $ip = "[{$ip}]";
@@ -524,7 +587,7 @@ class WgManager {
     // ---- 1 ポート分の nginx 設定 --------------------------
     // TLS をこのサーバーで終端し、トンネル内の PC へ HTTP で転送する。
     public static function build_nginx_conf(int $port, string $upstream): string {
-        $host = validate_hostname(get_setting('https_host'));
+        $host = validate_hostname(self::https_host());
         if ($host === '') {
             throw new RuntimeException('HTTPS 公開のホスト名が管理画面で設定されていません。');
         }
@@ -715,9 +778,24 @@ class WgManager {
             'proxy_mode' => $mode,
             'public_url' => self::public_url($port, $mode),
             'client_ip'  => $client_ip,
+            'owner_name' => (string)($row['owner_name'] ?? ''),
             'created_at' => $row['created_at'],
             'updated_at' => $row['updated_at'],
         ];
+    }
+
+    // ---- 登録者の名前を変更 (サーバーへの反映は不要) -------
+    // 変わったら true
+    public static function set_owner_name(int $port, string $name): bool {
+        $row = self::find_row($port);
+        if (!$row) {
+            throw new InvalidArgumentException("ポート {$port} は登録されていません。");
+        }
+        if ((string)($row['owner_name'] ?? '') === $name) return false;
+        get_db()->prepare("UPDATE wg_configs SET owner_name = ?, updated_at = CURRENT_TIMESTAMP WHERE port = ?")
+                ->execute([$name, $port]);
+        write_log('INFO', "ポート {$port} の登録者名を変更しました");
+        return true;
     }
 
     // ---- 公開方式が選べるか (HTTPS は管理者の設定が必要) ---
@@ -811,7 +889,7 @@ class WgManager {
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
     // $dest_port はトンネル内 PC 側の転送先ポート、$mode は公開方式 (dnat / https)。
     // 管理トークンは削除モードに関係なく毎回発行する (設定変更画面で使う)。
-    public static function issue(int $port, int $dest_port = 80, string $mode = 'dnat'): array {
+    public static function issue(int $port, int $dest_port = 80, string $mode = 'dnat', string $owner_name = ''): array {
         $mode = validate_proxy_mode($mode);
         self::assert_mode_usable($mode);
 
@@ -824,11 +902,12 @@ class WgManager {
 
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
-            INSERT INTO wg_configs (port, dest_port, proxy_mode, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
-            VALUES (:port, :dport, :mode, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
+            INSERT INTO wg_configs (port, dest_port, proxy_mode, owner_name, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
+            VALUES (:port, :dport, :mode, :owner, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
             ON CONFLICT(port) DO UPDATE SET
                 dest_port    = excluded.dest_port,
                 proxy_mode   = excluded.proxy_mode,
+                owner_name   = excluded.owner_name,
                 client_priv  = excluded.client_priv,
                 client_pub   = excluded.client_pub,
                 server_priv  = excluded.server_priv,
@@ -839,6 +918,7 @@ class WgManager {
             ':port'  => $port,
             ':dport' => $dest_port,
             ':mode'  => $mode,
+            ':owner' => $owner_name,
             ':cp'    => $client_kp['priv'],
             ':cP'    => $client_kp['pub'],
             ':sp'    => $server_kp['priv'],

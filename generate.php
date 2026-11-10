@@ -39,6 +39,7 @@ try {
     $port      = validate_port($port_raw);
     $dest_port = validate_dest_port($dest_raw);
     $mode      = validate_proxy_mode($mode_raw);
+    $owner     = validate_owner_name($body['owner_name'] ?? $_POST['owner_name'] ?? '');
     // 発行済みのポートはここでは作り直さない (鍵とトークンを他人に作り直されないように)。
     // 設定の変更・再取得は設定変更画面 (manage.php) で管理トークンを使って行う。
     if (WgManager::exists($port)) {
@@ -50,7 +51,7 @@ try {
         exit;
     }
     assert_port_allowed($port);
-    $result = WgManager::issue($port, $dest_port, $mode);
+    $result = WgManager::issue($port, $dest_port, $mode, $owner);
     echo json_encode(['ok' => true, 'data' => $result]);
 } catch (InvalidArgumentException $e) {
     http_response_code(400);
