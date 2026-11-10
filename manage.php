@@ -100,7 +100,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
 <title>設定変更 – WireGuard Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="portal.css">
+<link rel="stylesheet" href="portal.css?v=<?= (int)@filemtime(__DIR__ . '/portal.css') ?>">
 </head>
 <body>
 
@@ -154,7 +154,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
   <div class="card" id="manage-card" style="display:none">
     <div class="card-tools">
       <button type="button" class="mini-btn" id="reload-btn" onclick="doReload()">↻ 最新の状態にする</button>
-      <button type="button" class="mini-btn" onclick="doClose()">閉じる</button>
+      <button type="button" class="mini-btn plain" onclick="doClose()">閉じる</button>
     </div>
     <dl class="info-list">
       <dt>ポート</dt>       <dd id="i-port"></dd>

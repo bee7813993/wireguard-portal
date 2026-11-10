@@ -75,18 +75,23 @@ main {
 }
 
 /* ---- カード右上の小さいボタン ---- */
-.card-tools { display: flex; justify-content: flex-end; gap: 6px; margin: -.75rem 0 .75rem; }
+/* ほかのボタン (.dl-btn / .copy-btn) と同じ等幅フォント・角丸・枠線に合わせる */
+.card-tools { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 1.25rem; }
 .mini-btn {
-  padding: 4px 10px;
-  background: transparent;
-  border: 1px solid var(--border2);
-  border-radius: 6px;
-  color: var(--muted);
-  font-family: var(--sans);
+  padding: 6px 12px;
+  background: #f0f9ff;
+  border: 1.5px solid #bae6fd;
+  border-radius: 9px;
+  color: var(--accent2);
+  font-family: var(--mono);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
 }
-.mini-btn:hover { color: var(--accent2); border-color: var(--accent2); }
+.mini-btn:hover { border-color: var(--accent2); background: #e0f2fe; }
+.mini-btn.plain { background: var(--surface); border-color: var(--border2); color: var(--muted); }
+.mini-btn.plain:hover { color: var(--text); border-color: var(--muted); background: var(--surface); }
 .mini-btn:disabled { opacity: .5; cursor: default; }
 
 /* ---- 管理者からのお知らせ ---- */
