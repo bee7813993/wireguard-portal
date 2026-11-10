@@ -55,19 +55,46 @@ class WgManager {
              . "PersistentKeepalive = 25\n";
     }
 
+    // ---- 行 id からトンネル内のクライアントアドレスを算出 --
+    // 戻り値: [IPv4, IPv6]
+    public static function client_addrs(int $id): array {
+        $octet = (($id - 1) % 253) + 2;
+        return [
+            get_setting('subnet') . '.' . $octet,
+            get_setting('subnet_ipv6') . dechex($octet),
+        ];
+    }
+
     // ---- 全ピアを含む完全サーバー設定ファイル生成 --------
     public static function build_full_server_conf(): string {
-        $server_kp = get_or_create_server_keypair();
-        $subnet    = get_setting('subnet');
-        $subnet_ipv6 = get_setting('subnet_ipv6');
-        $server_ip = $subnet . '.1';
-        $server_ip6 = $subnet_ipv6 . '1';
-        $wg_port   = get_setting('wg_port');
+        [$up_lines, $down_lines, $peer_blocks] = self::build_server_parts();
+
+        $server_kp  = get_or_create_server_keypair();
+        $server_ip  = get_setting('subnet') . '.1';
+        $server_ip6 = get_setting('subnet_ipv6') . '1';
+        $wg_port    = get_setting('wg_port');
+
+        $conf = "[Interface]\n"
+              . "Address = {$server_ip}/24, {$server_ip6}/64\n"
+              . "ListenPort = {$wg_port}\n"
+              . "PrivateKey = {$server_kp['priv']}\n"
+              . "\n";
+
+        foreach ($up_lines   as $rule) $conf .= "PostUp   = {$rule}\n";
+        foreach ($down_lines as $rule) $conf .= "PostDown = {$rule}\n";
+
+        return $conf . $peer_blocks;
+    }
+
+    // ---- サーバー設定の部品: [PostUp 行, PostDown 行, [Peer] ブロック] --
+    // https のポートは nginx が受けるため DNAT / FORWARD を書かない
+    // (ピアの定義は方式に関係なく必要)。
+    private static function build_server_parts(): array {
         $nic       = get_setting('nic');
         $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
 
         $db   = get_db();
-        $rows = $db->query("SELECT id, port, client_pub, dest_port FROM wg_configs ORDER BY id ASC")->fetchAll();
+        $rows = $db->query("SELECT id, port, client_pub, dest_port, proxy_mode FROM wg_configs ORDER BY id ASC")->fetchAll();
 
         // ポータル製ルールの目印 (PostUp / PostDown で必ず同じ文字列を使う)
         $cmt = self::comment_opt();
@@ -84,11 +111,16 @@ class WgManager {
 
         $peer_blocks = '';
         foreach ($rows as $row) {
-            $octet      = (($row['id'] - 1) % 253) + 2;
-            $client_ip  = $subnet . '.' . $octet;
-            $client_ip6 = $subnet_ipv6 . dechex($octet);
+            [$client_ip, $client_ip6] = self::client_addrs((int)$row['id']);
             $port       = (int)$row['port'];
             $dest       = (int)($row['dest_port'] ?? 0) ?: 80;
+
+            // WireGuardは両方のアドレスを許可
+            $peer_blocks .= "\n[Peer]\n"
+                         .  "PublicKey = {$row['client_pub']}\n"
+                         .  "AllowedIPs = {$client_ip}/32, {$client_ip6}/128\n";
+
+            if (($row['proxy_mode'] ?? 'dnat') === 'https') continue;
 
             // IPv4 ルール
             $up_lines[]   = "iptables -t nat -A PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination {$client_ip}:{$dest}";
@@ -101,23 +133,9 @@ class WgManager {
             $up_lines[]   = "ip6tables -A FORWARD -p tcp -d {$client_ip6} --dport {$dest} {$cmt} -j ACCEPT";
             $down_lines[] = "ip6tables -t nat -D PREROUTING -i {$nic} -p tcp --dport {$port} {$cmt} -j DNAT --to-destination [{$client_ip6}]:{$dest}";
             $down_lines[] = "ip6tables -D FORWARD -p tcp -d {$client_ip6} --dport {$dest} {$cmt} -j ACCEPT";
-
-            // WireGuardは両方のアドレスを許可
-            $peer_blocks .= "\n[Peer]\n"
-                         .  "PublicKey = {$row['client_pub']}\n"
-                         .  "AllowedIPs = {$client_ip}/32, {$client_ip6}/128\n";
         }
 
-        $conf = "[Interface]\n"
-              . "Address = {$server_ip}/24, {$server_ip6}/64\n"
-              . "ListenPort = {$wg_port}\n"
-              . "PrivateKey = {$server_kp['priv']}\n"
-              . "\n";
-
-        foreach ($up_lines   as $rule) $conf .= "PostUp   = {$rule}\n";
-        foreach ($down_lines as $rule) $conf .= "PostDown = {$rule}\n";
-
-        return $conf . $peer_blocks;
+        return [$up_lines, $down_lines, $peer_blocks];
     }
 
     // ---- VPS サーバー用 wg.conf 生成 (単一ポート・後方互換) ---
@@ -360,10 +378,9 @@ class WgManager {
         write_log('INFO', "旧形式 (コメント無し) の iptables ルールを {$removed} 件削除しました");
     }
 
-    // ---- サーバーへ設定を適用 ----------------------------
-    public static function apply_server_config(): array {
-        $iface     = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
-        $conf      = self::build_full_server_conf();
+    // ---- WireGuard 設定ファイルの書き込み -----------------
+    // 失敗時はエラーメッセージ、成功時は null を返す
+    private static function write_server_conf(string $iface, string $conf): ?string {
         $conf_path = "/etc/wireguard/{$iface}.conf";
 
         // sudo tee で root 権限が必要なパスへ書き込み
@@ -373,24 +390,38 @@ class WgManager {
             $pipes
         );
         if (!is_resource($proc)) {
-            return ['success' => false, 'output' => "設定ファイルの書き込みに失敗しました: {$conf_path}"];
+            return "設定ファイルの書き込みに失敗しました: {$conf_path}";
         }
         fwrite($pipes[0], $conf);
         fclose($pipes[0]);
         $err      = stream_get_contents($pipes[2]);
         $writeRet = proc_close($proc);
         if ($writeRet !== 0) {
-            return ['success' => false, 'output' => "書き込みエラー: " . trim($err)];
+            return "書き込みエラー: " . trim($err);
         }
         exec('sudo chmod 600 ' . escapeshellarg($conf_path));
+        return null;
+    }
 
-        // インターフェースが起動中か確認
+    private static function is_interface_up(string $iface): bool {
         exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
+        return $running === 0;
+    }
 
-        if ($running === 0) {
+    // ---- サーバーへ設定を適用 (wg-quick down → up) --------
+    // ピアが増減したときに使う。全トンネルが数秒切れる。
+    public static function apply_server_config(): array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+
+        $err = self::write_server_conf($iface, self::build_full_server_conf());
+        if ($err !== null) {
+            return ['success' => false, 'output' => $err];
+        }
+
+        // インターフェースが起動中なら一度止める
+        $out1 = [];
+        if (self::is_interface_up($iface)) {
             exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
-        } else {
-            $out1 = [];
         }
 
         // wg-quick down では消えない古い残留iptablesルールを全削除
@@ -409,55 +440,382 @@ class WgManager {
         return ['success' => $success, 'output' => trim($output)];
     }
 
+    // ---- ピアを変えずに iptables ルールだけを入れ替える ----
+    // 公開方式や転送先ポートの変更ではピアが変わらないため、
+    // wg-quick down/up をせずにルールだけを作り直す (他のトンネルは切れない)。
+    // 設定ファイルも書き直すので、次回の wg-quick down では新しいルールが消える。
+    // インターフェースが止まっているときは通常の適用にする。
+    public static function reapply_rules(): array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+        if (!self::is_interface_up($iface)) {
+            return self::apply_server_config();
+        }
+
+        $err = self::write_server_conf($iface, self::build_full_server_conf());
+        if ($err !== null) {
+            return ['success' => false, 'output' => $err];
+        }
+
+        [$up_lines] = self::build_server_parts();
+        self::flush_stale_iptables($iface);
+
+        $out     = [];
+        $success = true;
+        foreach ($up_lines as $rule) {
+            // PostUp と同じ行を実行する (値は設定値と DB の整数だけから作られる)
+            exec('sudo ' . $rule . ' 2>&1', $out, $rc);
+            if ($rc !== 0) $success = false;
+        }
+        $output = trim(implode("\n", $out));
+
+        if ($success) {
+            write_log('INFO', "iptables ルールを再適用しました: {$iface}");
+        } else {
+            write_log('ERROR', "iptables ルールの再適用に失敗: {$iface} - {$output}");
+        }
+        return ['success' => $success, 'output' => $output];
+    }
+
+    // =====================================================
+    //  HTTPS 公開 (nginx)
+    // =====================================================
+
+    // HTTPS 公開に必要な設定 (ホスト名) が管理画面で入力済みか
+    public static function https_ready(): bool {
+        return get_setting('https_host') !== '';
+    }
+
+    // [証明書, 秘密鍵] のパス。未入力なら Let's Encrypt の標準の場所
+    public static function https_cert_paths(): array {
+        $host = get_setting('https_host');
+        return [
+            get_setting('https_cert')     ?: "/etc/letsencrypt/live/{$host}/fullchain.pem",
+            get_setting('https_cert_key') ?: "/etc/letsencrypt/live/{$host}/privkey.pem",
+        ];
+    }
+
+    // 外部から見た公開 URL
+    public static function public_url(int $port, string $mode): string {
+        if ($mode === 'https') {
+            return 'https://' . get_setting('https_host') . ':' . $port . '/';
+        }
+        $ip = get_setting('vps_ip');
+        if (str_contains($ip, ':')) $ip = "[{$ip}]";
+        return "http://{$ip}:{$port}/";
+    }
+
+    private static function nginx_conf_dir(): string {
+        return validate_abs_path(get_setting('nginx_conf_dir') ?: '/etc/nginx/wgportal.d', 'nginx 設定の置き場所');
+    }
+
+    // ---- 1 ポート分の nginx 設定 --------------------------
+    // TLS をこのサーバーで終端し、トンネル内の PC へ HTTP で転送する。
+    public static function build_nginx_conf(int $port, string $upstream): string {
+        $host = validate_hostname(get_setting('https_host'));
+        if ($host === '') {
+            throw new RuntimeException('HTTPS 公開のホスト名が管理画面で設定されていません。');
+        }
+        [$cert, $key] = self::https_cert_paths();
+        validate_abs_path($cert, '証明書のパス');
+        validate_abs_path($key, '秘密鍵のパス');
+
+        return "# wireguard-portal が自動生成したファイルです。手で編集しないでください。\n"
+             . "# ポート {$port} (HTTPS) → {$upstream} (HTTP)\n"
+             . "server {\n"
+             . "    listen {$port} ssl;\n"
+             . "    listen [::]:{$port} ssl;\n"
+             . "    server_name {$host};\n"
+             . "\n"
+             . "    ssl_certificate     {$cert};\n"
+             . "    ssl_certificate_key {$key};\n"
+             . "\n"
+             . "    # 同じポートに http で来たら https へ移す\n"
+             . "    error_page 497 =307 https://{$host}:{$port}\$request_uri;\n"
+             . "\n"
+             . "    client_max_body_size 1024m;\n"
+             . "\n"
+             . "    location / {\n"
+             . "        proxy_pass http://{$upstream};\n"
+             . "        proxy_http_version 1.1;\n"
+             . "        proxy_set_header Connection \"\";\n"
+             . "        # Host は固定値にする (利用者が送った Host をそのまま渡さない)\n"
+             . "        proxy_set_header Host {$host}:{$port};\n"
+             . "        proxy_set_header X-Forwarded-Proto https;\n"
+             . "        proxy_set_header X-Forwarded-For \$remote_addr;\n"
+             . "        proxy_buffering off;\n"
+             . "        proxy_request_buffering off;\n"
+             . "        proxy_read_timeout 360s;\n"
+             . "    }\n"
+             . "}\n";
+    }
+
+    // ---- DB の https ポートから [ファイル名 => 内容] を作る --
+    public static function build_nginx_confs(): array {
+        $rows = get_db()->query(
+            "SELECT id, port, dest_port FROM wg_configs WHERE proxy_mode = 'https' ORDER BY port ASC"
+        )->fetchAll();
+
+        $files = [];
+        foreach ($rows as $row) {
+            [$client_ip] = self::client_addrs((int)$row['id']);
+            $dest = (int)($row['dest_port'] ?? 0) ?: 80;
+            $port = (int)$row['port'];
+            $files["https-{$port}.conf"] = self::build_nginx_conf($port, "{$client_ip}:{$dest}");
+        }
+        return $files;
+    }
+
+    // ---- nginx 設定を DB の内容に合わせる ------------------
+    // 書き込み → nginx -t → (失敗なら元に戻す) → reload。
+    // 内容が変わらないときは何もしない (nginx を使わない環境にも影響しない)。
+    public static function apply_nginx_config(): array {
+        try {
+            $dir  = self::nginx_conf_dir();
+            $want = self::build_nginx_confs();
+        } catch (RuntimeException | InvalidArgumentException $e) {
+            return ['success' => false, 'output' => $e->getMessage()];
+        }
+
+        if (!is_dir($dir)) {
+            if (!$want) return ['success' => true, 'output' => ''];
+            return ['success' => false, 'output' => "nginx 設定の置き場所 {$dir} がありません。README の手順で作成してください。"];
+        }
+
+        $have = [];
+        foreach (glob($dir . '/https-*.conf') ?: [] as $path) {
+            $name = basename($path);
+            if (!preg_match('/^https-\d+\.conf$/', $name)) continue;
+            $have[$name] = (string)file_get_contents($path);
+        }
+        ksort($have);
+        ksort($want);
+        if ($have === $want) return ['success' => true, 'output' => ''];
+
+        $restore = function () use ($dir, $have, $want): void {
+            self::write_nginx_files($dir, $have, $want);
+        };
+
+        if (!self::write_nginx_files($dir, $want, $have)) {
+            $restore();
+            return ['success' => false, 'output' => "nginx 設定を {$dir} に書き込めませんでした (所有者と権限を確認してください)。"];
+        }
+
+        exec('sudo nginx -t 2>&1', $out_t, $rc_t);
+        if ($rc_t !== 0) {
+            $restore();
+            $msg = 'nginx の設定チェックに失敗したため、元の設定に戻しました: ' . trim(implode("\n", $out_t));
+            write_log('ERROR', $msg);
+            return ['success' => false, 'output' => $msg];
+        }
+
+        exec('sudo systemctl reload nginx 2>&1', $out_r, $rc_r);
+        if ($rc_r !== 0) {
+            $restore();
+            $msg = 'nginx の再読み込みに失敗したため、元の設定に戻しました: ' . trim(implode("\n", $out_r));
+            write_log('ERROR', $msg);
+            return ['success' => false, 'output' => $msg];
+        }
+
+        $ports = array_map(fn($n) => (int)substr($n, 6), array_keys($want));
+        write_log('INFO', 'nginx 設定を適用しました (HTTPS のポート: ' . ($ports ? implode(', ', $ports) : 'なし') . ')');
+        return ['success' => true, 'output' => ''];
+    }
+
+    // $files を書き込み、$old にあって $files にないファイルを消す
+    private static function write_nginx_files(string $dir, array $files, array $old): bool {
+        $ok = true;
+        foreach ($files as $name => $content) {
+            // *.conf に一致しない名前で書いてから置き換える (書きかけを nginx に読ませない)
+            $tmp = "{$dir}/.{$name}.tmp";
+            if (@file_put_contents($tmp, $content) === false || !@rename($tmp, "{$dir}/{$name}")) {
+                @unlink($tmp);
+                $ok = false;
+            }
+        }
+        foreach (array_keys(array_diff_key($old, $files)) as $name) {
+            if (file_exists("{$dir}/{$name}") && !@unlink("{$dir}/{$name}")) $ok = false;
+        }
+        return $ok;
+    }
+
+    // ---- nginx と WireGuard の両方を反映 -------------------
+    // $nginx_first: true  = HTTPS が増える向き (nginx が待ち受けてから DNAT を外す)
+    //               false = HTTPS が減る向き (DNAT を戻してから nginx を外す)
+    //               DNAT が残っている間は外部からの通信を DNAT が先に取るので、
+    //               この順なら切り替えで途切れない。
+    // $peers_changed: false ならピアは同じなので iptables だけを入れ替える。
+    public static function apply_all(bool $nginx_first = true, bool $peers_changed = true): array {
+        $wg    = fn() => $peers_changed ? self::apply_server_config() : self::reapply_rules();
+        $nginx = fn() => self::apply_nginx_config();
+        $steps = $nginx_first ? [$nginx, $wg] : [$wg, $nginx];
+
+        $outputs = [];
+        foreach ($steps as $step) {
+            $r = $step();
+            if ($r['output'] !== '') $outputs[] = $r['output'];
+            if (!$r['success']) {
+                return ['success' => false, 'output' => implode("\n", $outputs)];
+            }
+        }
+        return ['success' => true, 'output' => implode("\n", $outputs)];
+    }
+
+    // =====================================================
+    //  ポートごとの操作
+    // =====================================================
+
+    private static function find_row(int $port): ?array {
+        $stmt = get_db()->prepare("SELECT * FROM wg_configs WHERE port = ?");
+        $stmt->execute([$port]);
+        return $stmt->fetch() ?: null;
+    }
+
+    public static function exists(int $port): bool {
+        return self::find_row($port) !== null;
+    }
+
+    // ---- 管理トークンの照合 -------------------------------
+    public static function verify_token(int $port, string $token): bool {
+        $row  = self::find_row($port);
+        $hash = (string)($row['delete_token'] ?? '');
+        return $token !== '' && $hash !== '' && password_verify($token, $hash);
+    }
+
+    // ---- 管理トークンの再発行 (管理者用) -------------------
+    public static function reset_token(int $port): ?string {
+        if (!self::find_row($port)) return null;
+        [$plain, $hash] = generate_manage_token();
+        get_db()->prepare("UPDATE wg_configs SET delete_token = ? WHERE port = ?")->execute([$hash, $port]);
+        write_log('INFO', "ポート {$port} の管理トークンを発行しました");
+        return $plain;
+    }
+
+    // ---- 現在の設定 (表示用) -------------------------------
+    public static function port_info(int $port): ?array {
+        $row = self::find_row($port);
+        if (!$row) return null;
+        [$client_ip] = self::client_addrs((int)$row['id']);
+        $mode = $row['proxy_mode'] ?: 'dnat';
+        return [
+            'port'       => $port,
+            'dest_port'  => (int)($row['dest_port'] ?? 0) ?: 80,
+            'proxy_mode' => $mode,
+            'public_url' => self::public_url($port, $mode),
+            'client_ip'  => $client_ip,
+            'created_at' => $row['created_at'],
+            'updated_at' => $row['updated_at'],
+        ];
+    }
+
+    // ---- 公開方式が選べるか (HTTPS は管理者の設定が必要) ---
+    private static function assert_mode_usable(string $mode): void {
+        if ($mode === 'https' && !self::https_ready()) {
+            throw new InvalidArgumentException('HTTPS 公開は管理者が設定していないため選べません。');
+        }
+    }
+
+    // ---- 鍵を変えずに公開方式・転送先ポートを変更 ----------
+    public static function update_port(int $port, string $mode, int $dest_port): array {
+        $row = self::find_row($port);
+        if (!$row) {
+            throw new InvalidArgumentException("ポート {$port} は登録されていません。");
+        }
+        $mode     = validate_proxy_mode($mode);
+        $old_mode = $row['proxy_mode'] ?: 'dnat';
+        $old_dest = (int)($row['dest_port'] ?? 0) ?: 80;
+
+        if ($mode === $old_mode && $dest_port === $old_dest) {
+            return ['changed' => false, 'applied' => null, 'info' => self::port_info($port)];
+        }
+        if ($mode !== $old_mode) self::assert_mode_usable($mode);
+
+        // DNAT から nginx に移すポートは、ほかのサービスが待ち受けていないこと
+        // (DNAT のポートは LISTEN に現れないので、ここで見つかるのは別のサービス)
+        if ($mode === 'https' && $old_mode !== 'https' && get_setting('check_listen') !== '0') {
+            $listening = get_listening_tcp_ports();
+            if ($listening !== null && in_array($port, $listening, true)) {
+                throw new InvalidArgumentException(
+                    "ポート {$port} はサーバー上の別のサービスが使用中のため、HTTPS に切り替えられません。"
+                );
+            }
+        }
+
+        $save = function (string $m, int $d) use ($port): void {
+            get_db()->prepare("UPDATE wg_configs SET proxy_mode = ?, dest_port = ?, updated_at = CURRENT_TIMESTAMP WHERE port = ?")
+                    ->execute([$m, $d, $port]);
+        };
+        $save($mode, $dest_port);
+        write_log('INFO', "ポート {$port} の設定を変更しました (方式 {$old_mode}→{$mode}, 転送先 {$old_dest}→{$dest_port})");
+
+        $applied = null;
+        if (get_setting('auto_apply') === '1') {
+            $nginx_first = ($mode === 'https');
+            $applied = self::apply_all($nginx_first, false);
+            if (!$applied['success']) {
+                // 変更前の状態に戻す (逆の順序で反映し直す)
+                $save($old_mode, $old_dest);
+                self::apply_all(!$nginx_first, false);
+                write_log('ERROR', "ポート {$port} の設定変更を反映できなかったため元に戻しました: " . $applied['output']);
+            }
+        }
+
+        return ['changed' => true, 'applied' => $applied, 'info' => self::port_info($port)];
+    }
+
+    // ---- ポートの削除 -------------------------------------
+    // 見つからなければ null。見つかれば ['applied' => 自動適用の結果 or null]
+    public static function remove(int $port): ?array {
+        if (!self::find_row($port)) return null;
+        get_db()->prepare("DELETE FROM wg_configs WHERE port = ?")->execute([$port]);
+
+        $applied = null;
+        if (get_setting('auto_apply') === '1') {
+            $applied = self::apply_all(false, true);
+            if ($applied['success']) {
+                write_log('INFO', "ポート {$port} 削除後の自動適用完了");
+            } else {
+                write_log('ERROR', "ポート {$port} 削除後の自動適用失敗: " . $applied['output']);
+            }
+        }
+        return ['applied' => $applied];
+    }
+
     // ---- 既存ポートの設定を鍵を変えずに再生成 ------------
     public static function rebuild_client_conf(int $port): ?array {
-        $db   = get_db();
-        $stmt = $db->prepare("SELECT id, client_priv, client_pub, dest_port FROM wg_configs WHERE port = ?");
-        $stmt->execute([$port]);
-        $row = $stmt->fetch();
+        $row = self::find_row($port);
         if (!$row) return null;
 
         $server_kp   = get_or_create_server_keypair();
-        $subnet      = get_setting('subnet');
-        $server_ip   = $subnet . '.1';
-        $octet       = (((int)$row['id'] - 1) % 253) + 2;
-        $client_ip   = $subnet . '.' . $octet;
+        $server_ip   = get_setting('subnet') . '.1';
+        [$client_ip] = self::client_addrs((int)$row['id']);
 
         $client_conf = self::build_client_conf(
             $row['client_priv'], $server_kp['pub'], $client_ip, $server_ip
         );
-        return [
-            'port'        => $port,
-            'dest_port'   => (int)($row['dest_port'] ?? 0) ?: 80,
-            'client_ip'   => $client_ip,
-            'client_conf' => $client_conf,
-        ];
+        return self::port_info($port) + ['client_conf' => $client_conf];
     }
 
     // ---- メイン: ポートに対してキーペアを発行/再発行 ----
-    // $dest_port はトンネル内 PC 側の転送先ポート (DNAT の宛先)
-    public static function issue(int $port, int $dest_port = 80): array {
+    // $dest_port はトンネル内 PC 側の転送先ポート、$mode は公開方式 (dnat / https)。
+    // 管理トークンは削除モードに関係なく毎回発行する (設定変更画面で使う)。
+    public static function issue(int $port, int $dest_port = 80, string $mode = 'dnat'): array {
+        $mode = validate_proxy_mode($mode);
+        self::assert_mode_usable($mode);
+
         $db          = get_db();
         $server_kp   = get_or_create_server_keypair();
         $client_kp   = wg_generate_keypair();
-        $subnet      = get_setting('subnet');
-        $server_ip   = $subnet . '.1';
-        $delete_mode = get_setting('delete_mode') ?: 'none';
+        $server_ip   = get_setting('subnet') . '.1';
 
-        // delete_mode=token のとき削除トークンを生成
-        $plaintext_token = null;
-        $hashed_token    = null;
-        if ($delete_mode === 'token') {
-            $plaintext_token = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
-            $hashed_token    = password_hash($plaintext_token, PASSWORD_DEFAULT);
-        }
+        [$plaintext_token, $hashed_token] = generate_manage_token();
 
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
-            INSERT INTO wg_configs (port, dest_port, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
-            VALUES (:port, :dport, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
+            INSERT INTO wg_configs (port, dest_port, proxy_mode, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
+            VALUES (:port, :dport, :mode, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
             ON CONFLICT(port) DO UPDATE SET
                 dest_port    = excluded.dest_port,
+                proxy_mode   = excluded.proxy_mode,
                 client_priv  = excluded.client_priv,
                 client_pub   = excluded.client_pub,
                 server_priv  = excluded.server_priv,
@@ -467,6 +825,7 @@ class WgManager {
         ")->execute([
             ':port'  => $port,
             ':dport' => $dest_port,
+            ':mode'  => $mode,
             ':cp'    => $client_kp['priv'],
             ':cP'    => $client_kp['pub'],
             ':sp'    => $server_kp['priv'],
@@ -477,9 +836,7 @@ class WgManager {
         // UPSERT後に実際のidを取得してIPを算出（削除後の飛び番対策）
         $stmt = $db->prepare("SELECT id FROM wg_configs WHERE port = ?");
         $stmt->execute([$port]);
-        $actual_id = (int)$stmt->fetchColumn();
-        $octet     = (($actual_id - 1) % 253) + 2;
-        $client_ip = $subnet . '.' . $octet;
+        [$client_ip] = self::client_addrs((int)$stmt->fetchColumn());
 
         $client_conf = self::build_client_conf(
             $client_kp['priv'], $server_kp['pub'], $client_ip, $server_ip
@@ -488,11 +845,11 @@ class WgManager {
         $server_conf = self::build_full_server_conf();
         $setup_cmds  = self::build_setup_commands($port);
 
-        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip}, dest_port={$dest_port})");
+        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip}, dest_port={$dest_port}, mode={$mode})");
 
         $applied = null;
         if (get_setting('auto_apply') === '1') {
-            $applied = self::apply_server_config();
+            $applied = self::apply_all(true, true);
             if ($applied['success']) {
                 write_log('INFO', "ポート {$port} 自動適用完了");
             } else {
@@ -503,12 +860,14 @@ class WgManager {
         return [
             'port'         => $port,
             'dest_port'    => $dest_port,
+            'proxy_mode'   => $mode,
+            'public_url'   => self::public_url($port, $mode),
             'client_ip'    => $client_ip,
             'client_conf'  => $client_conf,
             'server_conf'  => $server_conf,
             'setup_cmds'   => $setup_cmds,
             'applied'      => $applied,
-            'delete_token' => $plaintext_token,
+            'manage_token' => $plaintext_token,
         ];
     }
 }

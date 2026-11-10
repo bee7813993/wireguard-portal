@@ -39,40 +39,21 @@ try {
         }
     }
 
-    $db   = get_db();
-    $stmt = $db->prepare("SELECT id, delete_token FROM wg_configs WHERE port = ?");
-    $stmt->execute([$port]);
-    $row  = $stmt->fetch();
-
-    if (!$row) {
+    if (!WgManager::exists($port)) {
         http_response_code(404);
         echo json_encode(['error' => "ポート {$port} の設定が見つかりません。"]);
         exit;
     }
 
-    // token モードはトークン照合
-    if ($delete_mode === 'token') {
-        $token_input = (string)($body['token'] ?? '');
-        $stored_hash = (string)($row['delete_token'] ?? '');
-        if (!$stored_hash || !password_verify($token_input, $stored_hash)) {
-            http_response_code(403);
-            echo json_encode(['error' => '削除トークンが正しくありません。']);
-            exit;
-        }
+    // token モードは管理トークン照合
+    if ($delete_mode === 'token' && !WgManager::verify_token($port, (string)($body['token'] ?? ''))) {
+        http_response_code(403);
+        echo json_encode(['error' => '管理トークンが正しくありません。']);
+        exit;
     }
 
-    $db->prepare("DELETE FROM wg_configs WHERE port = ?")->execute([$port]);
+    $applied = WgManager::remove($port)['applied'];
     write_log('INFO', "ユーザーがポート {$port} の設定を削除しました (mode={$delete_mode})");
-
-    $applied = null;
-    if (get_setting('auto_apply') === '1') {
-        $applied = WgManager::apply_server_config();
-        if ($applied['success']) {
-            write_log('INFO', "ポート {$port} 削除後の自動適用完了");
-        } else {
-            write_log('ERROR', "ポート {$port} 削除後の自動適用失敗: " . $applied['output']);
-        }
-    }
 
     echo json_encode(['ok' => true, 'port' => $port, 'applied' => $applied]);
 

@@ -5,6 +5,10 @@ $wg_iface    = htmlspecialchars(get_setting('wg_interface') ?: 'wg0');
 $auto_apply  = get_setting('auto_apply') === '1';
 $delete_mode = get_setting('delete_mode') ?: 'none';
 $default_dest_port = (int)(get_setting('default_dest_port') ?: 80) ?: 80;
+require_once __DIR__ . '/wg_manager.php';
+$https_ready  = WgManager::https_ready();
+$default_mode = (get_setting('default_proxy_mode') === 'https' && $https_ready) ? 'https' : 'dnat';
+$https_note   = get_setting('https_note');
 ?>
 <html lang="ja">
 <head>
@@ -13,384 +17,7 @@ $default_dest_port = (int)(get_setting('default_dest_port') ?: 80) ?: 80;
 <title>WireGuard Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-:root {
-  --bg:      #f0f4f8;
-  --surface: #ffffff;
-  --border:  #dde5ef;
-  --border2: #c9d5e4;
-  --accent:  #059669;
-  --accent2: #0284c7;
-  --text:    #1e293b;
-  --muted:   #6b7f96;
-  --mono:    'IBM Plex Mono', monospace;
-  --sans:    'IBM Plex Sans JP', sans-serif;
-  --shadow:  0 2px 12px rgba(30,50,80,.08);
-  --shadow2: 0 1px 4px rgba(30,50,80,.06);
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 16px; }
-body {
-  font-family: var(--sans);
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ---- Header ---- */
-header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 1rem 2rem;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  box-shadow: var(--shadow2);
-}
-.logo-mark {
-  width: 30px; height: 30px;
-  background: linear-gradient(135deg, #d1fae5, #a7f3d0);
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-}
-.logo-mark svg { width: 16px; height: 16px; }
-.logo-text { font-family: var(--mono); font-size: 14px; letter-spacing: .06em; color: var(--text); }
-.logo-text span { color: var(--accent); }
-
-/* ---- Main layout ---- */
-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 3rem 1.5rem 2.5rem;
-  gap: 2rem;
-}
-
-/* ---- Hero ---- */
-.hero { text-align: center; }
-.hero h1 {
-  font-family: var(--mono);
-  font-size: clamp(1.4rem, 4vw, 2rem);
-  font-weight: 500;
-  letter-spacing: -.01em;
-  line-height: 1.25;
-  margin-bottom: .65rem;
-  color: var(--text);
-}
-.hero h1 em { font-style: normal; color: var(--accent); }
-.hero p {
-  font-size: 14px;
-  color: var(--muted);
-  line-height: 1.75;
-  max-width: 40ch;
-  margin: 0 auto;
-}
-
-/* ---- Guide ---- */
-.guide {
-  width: 100%;
-  max-width: 540px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 1.5rem;
-  box-shadow: var(--shadow);
-}
-.guide-title {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--muted);
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  margin-bottom: 1.1rem;
-}
-.guide-steps { display: flex; flex-direction: column; gap: 12px; }
-.guide-step  { display: flex; gap: 12px; align-items: flex-start; }
-.guide-num {
-  width: 24px; height: 24px;
-  border-radius: 50%;
-  background: #d1fae5;
-  display: grid;
-  place-items: center;
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--accent);
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.guide-text { font-size: 13px; color: var(--text); line-height: 1.6; }
-.guide-text em {
-  font-style: normal;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent2);
-  background: #e0f2fe;
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-.guide-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
-
-/* ---- Card ---- */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  width: 100%;
-  max-width: 540px;
-  padding: 2rem;
-  box-shadow: var(--shadow);
-}
-
-/* ---- Form ---- */
-.input-group { display: flex; gap: 10px; margin-bottom: 1rem; }
-.input-wrap { flex: 1; position: relative; }
-.input-wrap label {
-  display: block;
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--muted);
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-.input-wrap input {
-  width: 100%;
-  background: var(--bg);
-  border: 1.5px solid var(--border2);
-  border-radius: 9px;
-  padding: 11px 14px;
-  font-family: var(--mono);
-  font-size: 16px;
-  color: var(--text);
-  outline: none;
-  transition: border-color .15s, box-shadow .15s;
-}
-.input-wrap input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(5,150,105,.1);
-}
-.input-wrap input.error { border-color: #ef4444; }
-.error-msg {
-  font-size: 12px;
-  color: #ef4444;
-  margin-top: 6px;
-  min-height: 16px;
-  font-family: var(--mono);
-}
-
-.btn-generate {
-  width: 100%;
-  padding: 13px;
-  background: var(--accent);
-  color: #ffffff;
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: .04em;
-  border: none;
-  border-radius: 9px;
-  cursor: pointer;
-  transition: opacity .15s, transform .1s, box-shadow .15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  box-shadow: 0 2px 8px rgba(5,150,105,.3);
-}
-.btn-generate:hover { opacity: .9; box-shadow: 0 4px 14px rgba(5,150,105,.35); }
-.btn-generate:active { transform: scale(.98); }
-.btn-generate:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
-
-/* ---- Warning ---- */
-.warn-box {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 9px;
-  padding: 12px 14px;
-  font-size: 13px;
-  color: #92400e;
-  line-height: 1.6;
-  margin-bottom: 1.5rem;
-  display: flex;
-  gap: 10px;
-}
-.warn-icon { flex-shrink: 0; margin-top: 1px; }
-
-/* ---- Result area ---- */
-#result-area { width: 100%; max-width: 540px; display: none; flex-direction: column; gap: 1.25rem; }
-
-.result-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
-  box-shadow: var(--shadow);
-}
-.result-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  user-select: none;
-  background: #fafbfc;
-  transition: background .12s;
-}
-.result-header:hover { background: #f3f7fa; }
-.result-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-.badge {
-  font-size: 10px;
-  padding: 2px 9px;
-  border-radius: 5px;
-  font-family: var(--mono);
-  letter-spacing: .04em;
-  font-weight: 500;
-}
-.badge-win  { background: #e0f2fe; color: #0369a1; }
-.badge-vps  { background: #d1fae5; color: #047857; }
-.badge-cmd  { background: #ede9fe; color: #6d28d9; }
-.chevron { transition: transform .2s; color: var(--muted); font-size: 12px; }
-.chevron.open { transform: rotate(180deg); }
-
-.result-body { display: none; padding: 16px 18px; }
-.result-body.open { display: block; }
-
-.code-block {
-  position: relative;
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 14px 16px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.75;
-  color: var(--text);
-  white-space: pre;
-  overflow-x: auto;
-}
-.copy-btn {
-  position: absolute;
-  top: 8px; right: 8px;
-  padding: 3px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  border-radius: 5px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-  cursor: pointer;
-  transition: color .1s, border-color .1s;
-}
-.copy-btn:hover { color: var(--text); border-color: var(--muted); }
-.copy-btn.copied { color: var(--accent); border-color: var(--accent); }
-
-.dl-btn {
-  margin-top: 12px;
-  width: 100%;
-  padding: 10px;
-  background: #f0f9ff;
-  border: 1.5px solid #bae6fd;
-  border-radius: 9px;
-  color: var(--accent2);
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color .15s, background .15s;
-}
-.dl-btn:hover { border-color: var(--accent2); background: #e0f2fe; }
-
-/* ---- Delete section ---- */
-.btn-delete {
-  width: 100%;
-  padding: 13px;
-  background: transparent;
-  color: #dc2626;
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: .04em;
-  border: 1.5px solid #fca5a5;
-  border-radius: 9px;
-  cursor: pointer;
-  transition: background .15s, border-color .15s;
-}
-.btn-delete:hover { background: #fef2f2; border-color: #dc2626; }
-.btn-delete:disabled { opacity: .4; cursor: not-allowed; }
-.del-ok  { background: #f0fdf4; border: 1px solid #86efac; color: #166534; border-radius: 9px; padding: 12px 14px; font-family: var(--mono); font-size: 13px; margin-top: 1rem; }
-.del-err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; border-radius: 9px; padding: 12px 14px; font-family: var(--mono); font-size: 13px; margin-top: 1rem; }
-
-/* ---- Admin detail accordion ---- */
-.detail-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--muted);
-  transition: background .12s, color .12s;
-  box-shadow: var(--shadow2);
-}
-.detail-toggle:hover { background: #f3f7fa; color: var(--text); }
-.detail-body { display: flex; flex-direction: column; gap: 1.25rem; margin-top: .75rem; }
-
-/* ---- Apply status ---- */
-.apply-card {
-  border-radius: 10px;
-  padding: 14px 18px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.apply-ok  { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
-.apply-err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
-.apply-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-.apply-output { white-space: pre-wrap; color: var(--muted); margin-top: 6px; font-size: 11px; }
-
-/* ---- Spinner ---- */
-.spinner {
-  width: 16px; height: 16px;
-  border: 2px solid rgba(255,255,255,.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin .7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ---- Footer ---- */
-footer {
-  text-align: center;
-  padding: 1.25rem;
-  font-size: 12px;
-  color: var(--muted);
-  border-top: 1px solid var(--border);
-  font-family: var(--mono);
-  background: var(--surface);
-}
-footer a { color: var(--muted); text-decoration: none; }
-footer a:hover { color: var(--accent); }
-</style>
+<link rel="stylesheet" href="portal.css">
 </head>
 <body>
 
@@ -421,7 +48,7 @@ footer a:hover { color: var(--accent); }
         <span class="guide-num">1</span>
         <div>
           <div class="guide-text">公開したい <em>外部ポート番号</em> を入力する</div>
-          <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります</div>
+          <div class="guide-sub">例: 11090 → 外部から http://[VPSのIP]:11090 でアクセス可能になります<?php if ($https_ready): ?> (HTTPS を選んだ場合は https://<?= htmlspecialchars(get_setting('https_host')) ?>:11090)<?php endif; ?></div>
           <div class="guide-sub">※ サーバー上で使用中のポートなど、指定できないポート番号があります。エラーになった場合は別の番号をお試しください</div>
           <div class="guide-sub">※ PC 側で待ち受けているポートが 80 以外の場合は <em>転送先ポート</em> も変更してください</div>
         </div>
@@ -460,7 +87,7 @@ footer a:hover { color: var(--accent); }
   <div class="card">
     <div class="warn-box">
       <span class="warn-icon">⚠</span>
-      <span>同じポートを再入力すると<strong>鍵と設定が再発行</strong>され、以前の設定は無効になります。</span>
+      <span>発行済みのポートの公開方式の変更や設定ファイルの再取得は、<a class="sub-link" href="manage.php">設定変更画面</a>から<strong>管理トークン</strong>を使って行います。</span>
     </div>
 
     <div class="input-group">
@@ -476,6 +103,24 @@ footer a:hover { color: var(--accent); }
                value="<?= $default_dest_port ?>" autocomplete="off">
         <div class="error-msg" id="dest-port-error"></div>
       </div>
+    </div>
+
+    <label class="field-label">公開方式</label>
+    <div class="mode-group">
+      <label class="mode-opt">
+        <input type="radio" name="proxy_mode" value="dnat" <?= $default_mode === 'dnat' ? 'checked' : '' ?>> HTTP
+      </label>
+      <label class="mode-opt<?= $https_ready ? '' : ' disabled' ?>">
+        <input type="radio" name="proxy_mode" value="https" <?= $default_mode === 'https' ? 'checked' : '' ?> <?= $https_ready ? '' : 'disabled' ?>> HTTPS
+      </label>
+    </div>
+    <div class="mode-note">
+      <?php if ($https_ready): ?>
+        HTTPS: <?= htmlspecialchars($https_note) ?><br>
+        方式はあとから設定変更画面で切り替えられます (鍵は変わりません)。
+      <?php else: ?>
+        HTTPS 公開は管理者が設定していないため選べません。
+      <?php endif; ?>
     </div>
 
     <button class="btn-generate" id="gen-btn" onclick="doGenerate()">
@@ -496,7 +141,7 @@ footer a:hover { color: var(--accent); }
         <span class="chevron open">▾</span>
       </div>
       <div class="result-body open" id="panel-win">
-        <div class="guide-sub" id="fwd-summary" style="margin:0 0 10px"></div>
+        <div class="guide-sub" id="fwd-summary" style="margin:0 0 10px;white-space:pre-line;font-size:12px;line-height:1.7"></div>
         <div class="code-block" id="win-conf-block">
           <button class="copy-btn" onclick="copyBlock('win-conf-block')">コピー</button>
         </div>
@@ -504,24 +149,22 @@ footer a:hover { color: var(--accent); }
       </div>
     </div>
 
-    <!-- 削除トークン (token モードのみ) -->
-    <?php if ($delete_mode === 'token'): ?>
+    <!-- 管理トークン -->
     <div id="token-notice" class="result-card" style="display:none">
       <div class="result-header" style="cursor:default;background:#fffbeb;border-color:#fde68a">
         <div class="result-title" style="color:#92400e">
           <span class="badge" style="background:#fef3c7;color:#92400e">TOKEN</span>
-          削除トークン（この画面を閉じると二度と表示されません）
+          管理トークン（この画面を閉じると二度と表示されません）
         </div>
       </div>
       <div class="result-body open" style="display:block">
         <div class="code-block" id="token-value" style="word-break:break-all;user-select:all"></div>
         <p style="font-size:12px;color:#92400e;margin-top:10px;line-height:1.7">
-          設定を削除するときに必要です。安全な場所に保存してください。<br>
-          同じポートで再生成すると新しいトークンに更新されます。
+          <a class="sub-link" href="manage.php">設定変更画面</a>で、公開方式の変更や設定ファイルの再取得に使います<?= $delete_mode === 'token' ? '。設定の削除にも必要です' : '' ?>。安全な場所に保存してください。<br>
+          なくした場合は、管理者に再発行を依頼してください。
         </p>
       </div>
     </div>
-    <?php endif; ?>
 
     <!-- 管理者向け詳細 (折りたたみ) -->
     <div>
@@ -591,7 +234,7 @@ footer a:hover { color: var(--accent); }
     <?php if ($delete_mode === 'token'): ?>
     <div class="input-group">
       <div class="input-wrap">
-        <label>削除トークン</label>
+        <label>管理トークン</label>
         <input type="text" id="del-token-input" placeholder="設定生成時に表示されたトークン" autocomplete="off">
         <div class="error-msg" id="del-token-error"></div>
       </div>
@@ -608,7 +251,7 @@ footer a:hover { color: var(--accent); }
 </main>
 
 <footer>
-  <a href="admin.php">管理画面</a>
+  <a href="manage.php">設定変更</a> &nbsp;·&nbsp; <a href="admin.php">管理画面</a>
 </footer>
 
 <script>
@@ -626,6 +269,7 @@ async function doGenerate() {
   const label     = document.getElementById('btn-label');
   const port      = parseInt(input.value, 10);
   const destPort  = parseInt(destInput.value, 10);
+  const proxyMode = (document.querySelector('input[name="proxy_mode"]:checked') || {}).value || 'dnat';
 
   errEl.textContent     = '';
   destErrEl.textContent = '';
@@ -651,12 +295,19 @@ async function doGenerate() {
     const res  = await fetch('generate.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port, dest_port: destPort })
+      body: JSON.stringify({ port, dest_port: destPort, proxy_mode: proxyMode })
     });
     const json = await res.json();
 
     if (!res.ok || !json.ok) {
       errEl.textContent = json.error || 'エラーが発生しました。';
+      if (json.manage) {
+        const a = document.createElement('a');
+        a.href = `manage.php?port=${port}`;
+        a.className = 'sub-link';
+        a.textContent = ' → 設定変更画面へ';
+        errEl.appendChild(a);
+      }
       input.classList.add('error');
       return;
     }
@@ -671,18 +322,14 @@ async function doGenerate() {
 
     document.getElementById('dl-btn').textContent = `↓ wg-client_${d.port}.conf をダウンロード`;
     document.getElementById('fwd-summary').textContent =
+      `公開 URL: ${d.public_url} (${d.proxy_mode === 'https' ? 'HTTPS' : 'HTTP'})
+` +
       `外部ポート ${d.port} → PC (${d.client_ip}) のポート ${d.dest_port} に転送されます。`;
 
-    // 削除トークン表示 (token モードのみ)
+    // 管理トークン表示
     const tokenNotice = document.getElementById('token-notice');
-    if (tokenNotice) {
-      if (d.delete_token) {
-        document.getElementById('token-value').textContent = d.delete_token;
-        tokenNotice.style.display = 'block';
-      } else {
-        tokenNotice.style.display = 'none';
-      }
-    }
+    document.getElementById('token-value').textContent = d.manage_token || '';
+    tokenNotice.style.display = d.manage_token ? 'block' : 'none';
 
     const applyEl = document.getElementById('apply-result');
     if (d.applied !== null && d.applied !== undefined) {
@@ -707,7 +354,7 @@ async function doGenerate() {
     errEl.textContent = 'ネットワークエラーが発生しました。';
   } finally {
     btn.disabled = false;
-    label.textContent = '設定を再生成する';
+    label.textContent = '設定を生成する';
   }
 }
 
@@ -794,7 +441,7 @@ async function doDelete() {
     const tokenErrEl = document.getElementById('del-token-error');
     if (tokenErrEl) tokenErrEl.textContent = '';
     if (!token) {
-      if (tokenErrEl) tokenErrEl.textContent = '削除トークンを入力してください。';
+      if (tokenErrEl) tokenErrEl.textContent = '管理トークンを入力してください。';
       return;
     }
   }

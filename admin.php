@@ -87,9 +87,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_c
 
 // ---- WireGuard 設定を IPv6 対応で再適用 ------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'apply_ipv6') {
-    $res = WgManager::apply_server_config();
+    $res = WgManager::apply_all(true, true);
     if ($res['success']) {
-        $success = '全ポートを IPv6 対応で再適用しました。クライアントの設定ファイルも更新してください。';
+        $success = '全ポートを再適用しました (WireGuard / iptables / nginx)。';
     } else {
         $error = 'サーバー設定の適用に失敗しました: ' . $res['output'];
     }
@@ -111,10 +111,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'teard
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_port') {
     $del_port = (int)($_POST['del_port'] ?? 0);
     if ($del_port >= 1024 && $del_port <= 65535) {
-        $deleted = get_db()->prepare("DELETE FROM wg_configs WHERE port = ?")->execute([$del_port]);
+        $res = WgManager::remove($del_port);
         write_log('INFO', "管理者がポート {$del_port} を削除しました");
-        if (get_setting('auto_apply') === '1') {
-            $res = WgManager::apply_server_config();
+        if ($res === null) {
+            $error = "ポート {$del_port} は登録されていません。";
+        } elseif ($res['applied'] !== null) {
+            $res = $res['applied'];
             if ($res['success']) {
                 $success = "ポート {$del_port} を削除し、サーバーへ反映しました。";
             } else {
@@ -123,6 +125,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         } else {
             $success = "ポート {$del_port} を削除しました。";
         }
+    }
+}
+
+// ---- 公開方式の切り替え (鍵は変えない) --------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_mode') {
+    $mode_port = (int)($_POST['mode_port'] ?? 0);
+    try {
+        $info = WgManager::port_info($mode_port);
+        if ($info === null) throw new InvalidArgumentException("ポート {$mode_port} は登録されていません。");
+        $res   = WgManager::update_port($mode_port, (string)($_POST['proxy_mode'] ?? ''), $info['dest_port']);
+        $label = PROXY_MODES[$res['info']['proxy_mode']];
+        write_log('INFO', "管理者がポート {$mode_port} の公開方式を変更しました");
+        if ($res['applied'] === null) {
+            $success = "ポート {$mode_port} を {$label} に変更しました" . ($res['changed'] ? ' (自動適用が無効のため未反映です)。' : '。');
+        } elseif ($res['applied']['success']) {
+            $success = "ポート {$mode_port} を {$label} に変更し、サーバーへ反映しました。";
+        } else {
+            $error = "ポート {$mode_port} の変更をサーバーへ反映できなかったため、元に戻しました: " . $res['applied']['output'];
+        }
+    } catch (InvalidArgumentException $e) {
+        $error = $e->getMessage();
+    }
+}
+
+// ---- 管理トークンの発行 ----------------------------------
+$issued_token = null;  // [port, token] 一度だけ表示する
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_token') {
+    $tok_port = (int)($_POST['tok_port'] ?? 0);
+    $tok = WgManager::reset_token($tok_port);
+    if ($tok === null) {
+        $error = "ポート {$tok_port} は登録されていません。";
+    } else {
+        $issued_token = [$tok_port, $tok];
     }
 }
 
@@ -173,6 +208,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         }
         set_setting($f, $spec);
     }
+    // HTTPS 公開: nginx 設定に埋め込む値は書式を検証してから保存
+    $https_fields = [
+        'https_host'     => fn($v) => validate_hostname($v),
+        'https_cert'     => fn($v) => validate_abs_path($v, '証明書のパス'),
+        'https_cert_key' => fn($v) => validate_abs_path($v, '秘密鍵のパス'),
+        'nginx_conf_dir' => fn($v) => validate_abs_path($v, 'nginx 設定の置き場所'),
+    ];
+    foreach ($https_fields as $f => $check) {
+        if (!isset($_POST[$f])) continue;
+        $v = trim($_POST[$f]);
+        try {
+            set_setting($f, $check($v));
+        } catch (InvalidArgumentException $e) {
+            $save_errors[]     = $e->getMessage();
+            $invalid_specs[$f] = $v;
+        }
+    }
+    if (isset($_POST['https_note'])) set_setting('https_note', trim($_POST['https_note']));
+    $new_default_mode = $_POST['default_proxy_mode'] ?? 'dnat';
+    set_setting('default_proxy_mode', array_key_exists($new_default_mode, PROXY_MODES) ? $new_default_mode : 'dnat');
+
     $allowed_modes = ['none', 'token', 'admin'];
     $new_mode = $_POST['delete_mode'] ?? 'none';
     set_setting('delete_mode', in_array($new_mode, $allowed_modes, true) ? $new_mode : 'none');
@@ -206,6 +262,12 @@ $cfg = [
     'blocked_ports' => $invalid_specs['blocked_ports'] ?? get_setting('blocked_ports'),
     'allowed_ports' => $invalid_specs['allowed_ports'] ?? get_setting('allowed_ports'),
     'default_dest_port' => $invalid_specs['default_dest_port'] ?? (get_setting('default_dest_port') ?: '80'),
+    'default_proxy_mode' => get_setting('default_proxy_mode') ?: 'dnat',
+    'https_host'     => $invalid_specs['https_host']     ?? get_setting('https_host'),
+    'https_cert'     => $invalid_specs['https_cert']     ?? get_setting('https_cert'),
+    'https_cert_key' => $invalid_specs['https_cert_key'] ?? get_setting('https_cert_key'),
+    'nginx_conf_dir' => $invalid_specs['nginx_conf_dir'] ?? (get_setting('nginx_conf_dir') ?: '/etc/nginx/wgportal.d'),
+    'https_note'     => get_setting('https_note'),
 ];
 
 // ---- 現在 LISTEN 中の TCP ポート (参考表示用) --------------
@@ -213,7 +275,8 @@ $listening_ports = get_listening_tcp_ports();
 if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
-$rows = get_db()->query("SELECT port, dest_port, client_pub, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+$rows = get_db()->query("SELECT port, dest_port, proxy_mode, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+$https_ready = WgManager::https_ready();
 
 // ---- ログ読み込み ----------------------------------------
 $log_path  = dirname(DB_PATH) . '/portal.log';
@@ -360,19 +423,56 @@ tr:hover td{background:#fafbfc}
           <label>ユーザー削除モード</label>
           <div class="desc">
             <b>none</b>: ポート番号のみで削除可（認証なし）<br>
-            <b>token</b>: 設定生成時に発行されるトークンが必要<br>
+            <b>token</b>: 設定生成時に発行される管理トークンが必要<br>
             <b>admin</b>: 管理者のみ削除可（一般ユーザーの削除UIを非表示）
           </div>
           <select name="delete_mode" style="margin-top:6px">
             <option value="none"  <?= $cfg['delete_mode'] === 'none'  ? 'selected' : '' ?>>none — ポート番号のみ（認証なし）</option>
-            <option value="token" <?= $cfg['delete_mode'] === 'token' ? 'selected' : '' ?>>token — ポート番号 + 削除トークン</option>
+            <option value="token" <?= $cfg['delete_mode'] === 'token' ? 'selected' : '' ?>>token — ポート番号 + 管理トークン</option>
             <option value="admin" <?= $cfg['delete_mode'] === 'admin' ? 'selected' : '' ?>>admin — 管理者のみ</option>
           </select>
         </div>
 
         <div class="divider"></div>
+        <div class="section-title" style="margin-bottom:.5rem">HTTPS 公開 (nginx)</div>
+        <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。ホスト名が空のあいだ、利用者は HTTPS を選べません。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
+        <div class="field">
+          <label>HTTPS のホスト名</label>
+          <div class="desc">証明書のホスト名。公開 URL (https://ホスト名:ポート) と、PC へ渡す Host ヘッダーに使います</div>
+          <input type="text" name="https_host" value="<?= htmlspecialchars($cfg['https_host']) ?>" placeholder="portal.example.com">
+        </div>
+        <div class="field">
+          <label>証明書のパス (省略可)</label>
+          <div class="desc">空欄なら /etc/letsencrypt/live/{ホスト名}/fullchain.pem</div>
+          <input type="text" name="https_cert" value="<?= htmlspecialchars($cfg['https_cert']) ?>" placeholder="/etc/letsencrypt/live/portal.example.com/fullchain.pem">
+        </div>
+        <div class="field">
+          <label>秘密鍵のパス (省略可)</label>
+          <div class="desc">空欄なら /etc/letsencrypt/live/{ホスト名}/privkey.pem</div>
+          <input type="text" name="https_cert_key" value="<?= htmlspecialchars($cfg['https_cert_key']) ?>" placeholder="/etc/letsencrypt/live/portal.example.com/privkey.pem">
+        </div>
+        <div class="field">
+          <label>nginx 設定の置き場所</label>
+          <div class="desc">ポートごとの設定ファイル (https-{ポート}.conf) を書き込むディレクトリ。www-data が書き込めて、nginx から include されている必要があります</div>
+          <input type="text" name="nginx_conf_dir" value="<?= htmlspecialchars($cfg['nginx_conf_dir']) ?>" placeholder="/etc/nginx/wgportal.d">
+        </div>
+        <div class="field">
+          <label>新規発行時の公開方式の既定値</label>
+          <div class="desc">トップ画面で最初に選ばれている方式。利用者が発行時に選び直せます</div>
+          <select name="default_proxy_mode">
+            <option value="dnat"  <?= $cfg['default_proxy_mode'] === 'dnat'  ? 'selected' : '' ?>>HTTP (iptables で転送)</option>
+            <option value="https" <?= $cfg['default_proxy_mode'] === 'https' ? 'selected' : '' ?>>HTTPS (nginx で TLS を終端)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>HTTPS の注意書き</label>
+          <div class="desc">トップ画面と設定変更画面で、HTTPS の選択肢の下に表示します (PC 側のアプリに必要な対応など)</div>
+          <input type="text" name="https_note" value="<?= htmlspecialchars($cfg['https_note']) ?>">
+        </div>
+
+        <div class="divider"></div>
         <div class="section-title" style="margin-bottom:.5rem">ポート制限</div>
-        <div class="desc" style="margin-bottom:1rem">制限は新規ポートの発行時のみ適用されます。発行済みポートの再生成・削除は制限されません。</div>
+        <div class="desc" style="margin-bottom:1rem">制限は新規ポートの発行時のみ適用されます。発行済みポートの設定変更・削除は制限されません。</div>
         <div class="field">
           <label>使用中ポートの自動ブロック</label>
           <div class="desc">サーバー上で LISTEN 中の TCP ポート (SSH・Web サーバー等) への設定生成を拒否します。既存サービスへのアクセス遮断を防ぎます。ループバック (127.0.0.1 / ::1) のみで待ち受けるサービスは外部ポート転送と競合しないため対象外です。</div>
@@ -424,9 +524,9 @@ tr:hover td{background:#fafbfc}
     <div class="section-title">WireGuard 制御</div>
     <div class="card" style="display:flex;flex-direction:column;gap:1.25rem">
       <div>
-        <p style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:.4rem">IPv6 対応で再適用</p>
+        <p style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:.4rem">全ポートを再適用</p>
         <p style="font-size:13px;color:var(--muted);margin-bottom:.9rem;line-height:1.7">
-          既存の全ポートを含む WireGuard 設定を IPv6 ルール付きで書き直し、wg-quick で反映します。<br>
+          既存の全ポートを含む WireGuard 設定 (IPv4 / IPv6 のルール付き) と、HTTPS のポートの nginx 設定を書き直して反映します。全トンネルが数秒切れます。<br>
           適用後、各クライアントはポート一覧の「設定を表示」から新しい .conf を取得してください。
         </p>
         <details style="margin-bottom:.9rem;font-size:12px;color:var(--muted)">
@@ -445,9 +545,9 @@ sudo modprobe ip6table_nat
 echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
           </div>
         </details>
-        <form method="post" onsubmit="return confirm('WireGuard設定をIPv6対応で再適用します。よろしいですか？')">
+        <form method="post" onsubmit="return confirm('全ポートの設定を再適用します。よろしいですか？')">
           <input type="hidden" name="action" value="apply_ipv6">
-          <button type="submit" class="apply-btn">IPv6 対応で全ポートを再適用</button>
+          <button type="submit" class="apply-btn">全ポートを再適用</button>
         </form>
       </div>
       <div style="border-top:1px solid var(--border);padding-top:1.25rem">
@@ -467,6 +567,12 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
   <!-- 発行済みポート一覧 -->
   <div>
     <div class="section-title">発行済みポート一覧</div>
+    <?php if ($issued_token): ?>
+    <div class="card" style="margin-bottom:1rem;background:#fffbeb;border-color:#fde68a">
+      <p style="font-size:13px;color:#92400e;margin-bottom:.6rem">ポート <?= (int)$issued_token[0] ?> の管理トークンを発行しました。この表示は一度だけです。利用者に伝えてください (以前のトークンは無効になりました)。</p>
+      <code style="display:block;font-family:var(--mono);font-size:13px;word-break:break-all;user-select:all;background:#fff;border:1px solid #fde68a;border-radius:7px;padding:10px 12px"><?= htmlspecialchars($issued_token[1]) ?></code>
+    </div>
+    <?php endif; ?>
     <div class="card" style="padding:0;overflow:hidden">
       <?php if (empty($rows)): ?>
         <p class="no-rows">まだ発行されていません</p>
@@ -475,21 +581,38 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
         <thead>
           <tr>
             <th>ポート</th>
+            <th>方式</th>
             <th>転送先</th>
             <th>クライアント公開鍵</th>
             <th>最終更新</th>
-            <th style="width:130px"></th>
+            <th style="width:250px"></th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($rows as $r): ?>
           <tr>
+            <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
             <td><span class="port-badge"><?= (int)$r['port'] ?></span></td>
+            <td>
+              <form method="post" style="display:flex;gap:6px;align-items:center;white-space:nowrap"
+                    onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を <?= $is_https ? 'HTTP' : 'HTTPS' ?> に切り替えますか？')">
+                <input type="hidden" name="action" value="set_mode">
+                <input type="hidden" name="mode_port" value="<?= (int)$r['port'] ?>">
+                <input type="hidden" name="proxy_mode" value="<?= $is_https ? 'dnat' : 'https' ?>">
+                <span><?= $is_https ? 'HTTPS' : 'HTTP' ?></span>
+                <button type="submit" class="conf-btn" <?= (!$is_https && !$https_ready) ? 'disabled title="HTTPS 公開のホスト名が未設定です"' : '' ?>>→ <?= $is_https ? 'HTTP' : 'HTTPS' ?></button>
+              </form>
+            </td>
             <td style="color:var(--muted)">→ :<?= (int)$r['dest_port'] ?: 80 ?></td>
             <td style="color:var(--muted)"><?= htmlspecialchars(substr($r['client_pub'],0,24)) ?>…</td>
             <td style="color:var(--muted)"><?= htmlspecialchars($r['updated_at']) ?></td>
             <td style="display:flex;gap:6px;align-items:center">
               <button class="conf-btn" onclick="showClientConf(<?= (int)$r['port'] ?>)">設定を表示</button>
+              <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
+                <input type="hidden" name="action" value="reset_token">
+                <input type="hidden" name="tok_port" value="<?= (int)$r['port'] ?>">
+                <button type="submit" class="conf-btn"><?= empty($r['delete_token']) ? 'トークン発行' : 'トークン再発行' ?></button>
+              </form>
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を削除しますか？\nこの操作は元に戻せません。')">
                 <input type="hidden" name="action" value="delete_port">
                 <input type="hidden" name="del_port" value="<?= (int)$r['port'] ?>">
