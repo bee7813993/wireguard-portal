@@ -9,6 +9,7 @@ require_once __DIR__ . '/wg_manager.php';
 $https_ready  = WgManager::https_ready();
 $default_mode = (get_setting('default_proxy_mode') === 'https' && $https_ready) ? 'https' : 'dnat';
 $https_note   = get_setting('https_note');
+$notice       = get_setting('notice');
 ?>
 <html lang="ja">
 <head>
@@ -39,6 +40,11 @@ $https_note   = get_setting('https_note');
     <h1>ローカルサーバーを<em>外部公開</em></h1>
     <p>自宅・社内の PC で動いている Web サーバーを VPN 経由でインターネットに安全に公開できます。</p>
   </div>
+
+  <?php if ($notice !== ''): ?>
+  <!-- 管理者からのお知らせ -->
+  <div class="notice-box"><?= message_html($notice) ?></div>
+  <?php endif; ?>
 
   <!-- 発行済みの利用者向けの入口 -->
   <div class="manage-entry">
@@ -126,7 +132,7 @@ $https_note   = get_setting('https_note');
     </div>
     <div class="mode-note">
       <?php if ($https_ready): ?>
-        HTTPS: <?= htmlspecialchars($https_note) ?><br>
+        HTTPS: <?= message_html($https_note) ?><br>
         方式はあとから設定変更画面で切り替えられます (鍵は変わりません)。
       <?php else: ?>
         HTTPS 公開は管理者が設定していないため選べません。

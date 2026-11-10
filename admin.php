@@ -225,7 +225,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             $invalid_specs[$f] = $v;
         }
     }
-    if (isset($_POST['https_note'])) set_setting('https_note', trim($_POST['https_note']));
+    foreach (['https_note', 'notice'] as $f) {
+        if (isset($_POST[$f])) set_setting($f, normalize_message($_POST[$f]));
+    }
     $new_default_mode = $_POST['default_proxy_mode'] ?? 'dnat';
     set_setting('default_proxy_mode', array_key_exists($new_default_mode, PROXY_MODES) ? $new_default_mode : 'dnat');
 
@@ -268,6 +270,7 @@ $cfg = [
     'https_cert_key' => $invalid_specs['https_cert_key'] ?? get_setting('https_cert_key'),
     'nginx_conf_dir' => $invalid_specs['nginx_conf_dir'] ?? (get_setting('nginx_conf_dir') ?: '/etc/nginx/wgportal.d'),
     'https_note'     => get_setting('https_note'),
+    'notice'         => get_setting('notice'),
 ];
 
 // ---- 現在 LISTEN 中の TCP ポート (参考表示用) --------------
@@ -316,8 +319,9 @@ main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direc
 .field:last-of-type{margin-bottom:0}
 label{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px}
 .desc{font-size:12px;color:var(--muted);margin-bottom:7px}
-input[type=text],input[type=number],input[type=password],select{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;appearance:none}
-input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
+textarea{resize:vertical;min-height:4.5em;line-height:1.6;font-family:var(--sans) !important}
+input[type=text],input[type=number],input[type=password],select,textarea{width:100%;background:var(--bg);border:1.5px solid var(--border2);border-radius:9px;padding:9px 13px;font-family:var(--mono);font-size:14px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;appearance:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(5,150,105,.1)}
 .divider{border:none;border-top:1px solid var(--border);margin:1.5rem 0}
 .save-btn{padding:10px 28px;background:var(--accent);color:#fff;font-family:var(--mono);font-size:13px;font-weight:500;border:none;border-radius:9px;cursor:pointer;transition:opacity .15s;box-shadow:0 2px 8px rgba(5,150,105,.25)}
 .save-btn:hover{opacity:.9}
@@ -433,6 +437,12 @@ tr:hover td{background:#fafbfc}
           </select>
         </div>
 
+        <div class="field">
+          <label>お知らせ</label>
+          <div class="desc">トップ画面と設定変更画面の上部に表示します (メンテナンスの予定など)。空欄なら表示しません。改行はそのまま表示されます。HTML は使えません</div>
+          <textarea name="notice" rows="3"><?= htmlspecialchars($cfg['notice']) ?></textarea>
+        </div>
+
         <div class="divider"></div>
         <div class="section-title" style="margin-bottom:.5rem">HTTPS 公開 (nginx)</div>
         <div class="desc" style="margin-bottom:1rem">HTTPS を選んだポートは、このサーバーの nginx が TLS を終端し、トンネル内の PC へ HTTP で転送します。ホスト名が空のあいだ、利用者は HTTPS を選べません。HTTPS のポートがある状態でホスト名や証明書のパスを変えたときは、「全ポートを再適用」で nginx 設定を書き直してください。事前準備は README の「HTTPS 公開の準備」を参照してください。</div>
@@ -466,8 +476,8 @@ tr:hover td{background:#fafbfc}
         </div>
         <div class="field">
           <label>HTTPS の注意書き</label>
-          <div class="desc">トップ画面と設定変更画面で、HTTPS の選択肢の下に表示します (PC 側のアプリに必要な対応など)</div>
-          <input type="text" name="https_note" value="<?= htmlspecialchars($cfg['https_note']) ?>">
+          <div class="desc">トップ画面と設定変更画面で、HTTPS の選択肢の下に表示します (PC 側のアプリに必要な対応など)。改行はそのまま表示されます。HTML は使えません</div>
+          <textarea name="https_note" rows="3"><?= htmlspecialchars($cfg['https_note']) ?></textarea>
         </div>
 
         <div class="divider"></div>

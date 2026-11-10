@@ -78,6 +78,7 @@ function get_db(): PDO {
         'https_cert_key' => '',
         'nginx_conf_dir' => '/etc/nginx/wgportal.d',
         'https_note'     => 'HTTPS では、このサーバーで暗号化を終端し、PC へは HTTP で転送します。PC 側のアプリが X-Forwarded-Proto ヘッダーに対応していないと、正しく動かないことがあります。',
+        'notice'         => '',
         'admin_pass'    => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
@@ -97,6 +98,17 @@ function get_setting(string $key): string {
 function set_setting(string $key, string $value): void {
     get_db()->prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             ->execute([$key, $value]);
+}
+
+// ---- 管理者が書く表示用の文 (お知らせ・注意書き) ----------
+// 保存時: 改行を \n にそろえ、前後の空白を取る
+function normalize_message(string $text): string {
+    return trim(str_replace(["\r\n", "\r"], "\n", $text));
+}
+
+// 表示時: HTML として解釈させず、改行だけを <br> にする
+function message_html(string $text): string {
+    return nl2br(htmlspecialchars($text, ENT_QUOTES), false);
 }
 
 // ---- 管理者認証チェック ----------------------------------

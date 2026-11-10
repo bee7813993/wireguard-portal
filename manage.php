@@ -80,6 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ---- 画面表示 --------------------------------------------
 $https_ready = WgManager::https_ready();
 $https_note  = get_setting('https_note');
+$notice      = get_setting('notice');
 $auto_apply  = get_setting('auto_apply') === '1';
 $prefill     = (int)($_GET['port'] ?? 0);
 ?>
@@ -113,6 +114,11 @@ $prefill     = (int)($_GET['port'] ?? 0);
     <h1>発行済みポートの<em>設定変更</em></h1>
     <p>ポート番号と、発行時に表示された管理トークンを入力してください。</p>
   </div>
+
+  <?php if ($notice !== ''): ?>
+  <!-- 管理者からのお知らせ -->
+  <div class="notice-box"><?= message_html($notice) ?></div>
+  <?php endif; ?>
 
   <!-- 認証 -->
   <div class="card" id="auth-card">
@@ -156,7 +162,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
     </div>
     <div class="mode-note">
       <?php if ($https_ready): ?>
-        HTTPS: <?= htmlspecialchars($https_note) ?><br>
+        HTTPS: <?= message_html($https_note) ?><br>
       <?php else: ?>
         HTTPS 公開は管理者が設定していないため選べません。<br>
       <?php endif; ?>
