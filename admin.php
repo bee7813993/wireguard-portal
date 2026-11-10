@@ -352,6 +352,15 @@ tr:hover td{background:#fafbfc}
 .ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 10px}
 .cell-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
 .cell-row{display:flex;gap:6px;align-items:center}
+.name-edit{display:flex;align-items:center;gap:4px}
+.name-view,.name-input{display:flex;align-items:center;gap:4px}
+.name-view[hidden],.name-input[hidden]{display:none}
+.name-text{font-family:var(--sans);font-size:13px;color:var(--text)}
+.name-text.empty{color:var(--muted);font-size:12px}
+.icon-btn{width:26px;height:26px;display:inline-grid;place-items:center;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.icon-btn:hover{background:#f1f5f9;border-color:var(--border2);color:var(--text)}
+.icon-btn.ok{color:var(--accent);border-color:#a7f3d0}
+.icon-btn.ok:hover{background:#ecfdf5;border-color:var(--accent)}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -629,11 +638,19 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
             <td><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
             <td>
-              <form method="post" class="cell-stack">
+              <?php $owner = (string)($r['owner_name'] ?? ''); ?>
+              <form method="post" class="name-edit">
                 <input type="hidden" name="action" value="set_owner">
                 <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
-                <input type="text" name="owner_name" value="<?= htmlspecialchars($r['owner_name'] ?? '') ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="未登録" style="width:7.5em;padding:5px 8px;font-size:12px;font-family:var(--sans)">
-                <button type="submit" class="conf-btn">保存</button>
+                <span class="name-view">
+                  <span class="name-text<?= $owner === '' ? ' empty' : '' ?>"><?= $owner === '' ? '未登録' : htmlspecialchars($owner) ?></span>
+                  <button type="button" class="icon-btn" title="名前を編集" aria-label="名前を編集" onclick="editName(this)">✎</button>
+                </span>
+                <span class="name-input" hidden>
+                  <input type="text" name="owner_name" value="<?= htmlspecialchars($owner) ?>" maxlength="<?= OWNER_NAME_MAX ?>" placeholder="名前" style="width:8em;padding:4px 8px;font-size:12px;font-family:var(--sans)" onkeydown="if (event.key === 'Escape') cancelName(this)">
+                  <button type="submit" class="icon-btn ok" title="保存 (Enter)" aria-label="保存">✓</button>
+                  <button type="button" class="icon-btn" title="やめる (Esc)" aria-label="やめる" onclick="cancelName(this)">✕</button>
+                </span>
               </form>
             </td>
             <td>
@@ -715,6 +732,23 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
 </div>
 
 <script>
+// ---- ポート一覧: 名前の編集 (鉛筆で入力欄に切り替え、Enter か ✓ で保存) ----
+function editName(btn) {
+  const form  = btn.closest('form');
+  const input = form.querySelector('input[name="owner_name"]');
+  input.dataset.orig = input.value;
+  form.querySelector('.name-view').hidden  = true;
+  form.querySelector('.name-input').hidden = false;
+  input.focus();
+  input.select();
+}
+function cancelName(el) {
+  const form  = el.closest('form');
+  const input = form.querySelector('input[name="owner_name"]');
+  input.value = input.dataset.orig ?? input.value;
+  form.querySelector('.name-input').hidden = true;
+  form.querySelector('.name-view').hidden  = false;
+}
 let _confText = '';
 let _confPort = 0;
 
