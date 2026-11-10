@@ -4,7 +4,9 @@
 // =========================================================
 
 define('DB_PATH', __DIR__ . '/data/wg_portal.sqlite');
-define('ADMIN_SESSION_KEY', 'wg_admin_authed');
+// 同じドメインで複数のポータルを動かしても管理ログインを共有しないよう、
+// 設置ディレクトリごとに別のキーにする
+define('ADMIN_SESSION_KEY', 'wg_admin_authed_' . substr(hash('sha256', __DIR__), 0, 12));
 
 // ---- DB接続 (SQLite) ------------------------------------
 function get_db(): PDO {
@@ -25,6 +27,8 @@ function get_db(): PDO {
         CREATE TABLE IF NOT EXISTS wg_configs (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             port         INTEGER NOT NULL UNIQUE,
+            dest_port    INTEGER NOT NULL DEFAULT 80,
+            proxy_mode   TEXT    NOT NULL DEFAULT 'dnat',
             client_priv  TEXT    NOT NULL,
             client_pub   TEXT    NOT NULL,
             server_priv  TEXT    NOT NULL,
@@ -39,10 +43,19 @@ function get_db(): PDO {
         );
     ");
 
-    // 既存DBへの delete_token カラム追加マイグレーション
+    // 既存DBへのカラム追加マイグレーション
     $cols = array_column($pdo->query("PRAGMA table_info(wg_configs)")->fetchAll(), 'name');
     if (!in_array('delete_token', $cols, true)) {
         $pdo->exec("ALTER TABLE wg_configs ADD COLUMN delete_token TEXT DEFAULT NULL");
+    }
+    // 転送先ポート (DNAT の宛先)。旧レコードは 80 固定だったため既定値も 80
+    if (!in_array('dest_port', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN dest_port INTEGER NOT NULL DEFAULT 80");
+    }
+    // 公開方式 (dnat = iptables で転送 / https = nginx で TLS を終端して転送)。
+    // 旧レコードはすべて DNAT だったため既定値も dnat
+    if (!in_array('proxy_mode', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN proxy_mode TEXT NOT NULL DEFAULT 'dnat'");
     }
 
     // デフォルト設定を挿入 (初回のみ)
@@ -58,6 +71,14 @@ function get_db(): PDO {
         'check_listen'  => '1',
         'blocked_ports' => '',
         'allowed_ports' => '',
+        'default_dest_port' => '80',
+        'default_proxy_mode' => 'dnat',
+        'https_host'     => '',
+        'https_cert'     => '',
+        'https_cert_key' => '',
+        'nginx_conf_dir' => '/etc/nginx/wgportal.d',
+        'https_note'     => 'HTTPS では、このサーバーで暗号化を終端し、PC へは HTTP で転送します。PC 側のアプリが X-Forwarded-Proto ヘッダーに対応していないと、正しく動かないことがあります。',
+        'notice'         => '',
         'admin_pass'    => password_hash('changeme', PASSWORD_DEFAULT),
     ];
     $stmt = $pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)");
@@ -77,6 +98,17 @@ function get_setting(string $key): string {
 function set_setting(string $key, string $value): void {
     get_db()->prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             ->execute([$key, $value]);
+}
+
+// ---- 管理者が書く表示用の文 (お知らせ・注意書き) ----------
+// 保存時: 改行を \n にそろえ、前後の空白を取る
+function normalize_message(string $text): string {
+    return trim(str_replace(["\r\n", "\r"], "\n", $text));
+}
+
+// 表示時: HTML として解釈させず、改行だけを <br> にする
+function message_html(string $text): string {
+    return nl2br(htmlspecialchars($text, ENT_QUOTES), false);
 }
 
 // ---- 管理者認証チェック ----------------------------------
@@ -141,6 +173,52 @@ function validate_port(mixed $port): int {
         throw new InvalidArgumentException('ポート番号は 1024〜65535 の範囲で指定してください。');
     }
     return $p;
+}
+
+// ---- 転送先ポート番号バリデーション ----------------------
+// トンネル内 PC 側の待ち受けポート。VPS の外部ポート (validate_port) と違い
+// well-known ポートで待ち受けるのは正常な使い方なので 1 以上を許可する。
+function validate_dest_port(mixed $port): int {
+    $p = (int)$port;
+    if ($p < 1 || $p > 65535) {
+        throw new InvalidArgumentException('転送先ポート番号は 1〜65535 の範囲で指定してください。');
+    }
+    return $p;
+}
+
+// ---- 公開方式バリデーション ----------------------------
+const PROXY_MODES = ['dnat' => 'HTTP', 'https' => 'HTTPS'];
+
+function validate_proxy_mode(mixed $mode): string {
+    $m = (string)$mode;
+    if (!array_key_exists($m, PROXY_MODES)) {
+        throw new InvalidArgumentException('公開方式の指定が不正です。');
+    }
+    return $m;
+}
+
+// ---- nginx 設定に埋め込む値のバリデーション ---------------
+// 生成する nginx 設定へ別のディレクティブを差し込めないよう、
+// 使える文字を絞る。空文字は「未設定」として通す。
+function validate_hostname(string $host): string {
+    if ($host !== '' && !preg_match('/^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/', $host)) {
+        throw new InvalidArgumentException('HTTPS のホスト名の書式が不正です (例: portal.example.com)。');
+    }
+    return $host;
+}
+
+function validate_abs_path(string $path, string $label): string {
+    if ($path !== '' && !preg_match('#^/[A-Za-z0-9._/-]+$#', $path)) {
+        throw new InvalidArgumentException("{$label}は / から始まる絶対パスで指定してください (英数字と . _ / - のみ)。");
+    }
+    return $path;
+}
+
+// ---- 管理トークン生成 ------------------------------------
+// 設定変更・削除 (token モード) に使う。DB にはハッシュだけを保存する。
+function generate_manage_token(): array {
+    $plain = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
+    return [$plain, password_hash($plain, PASSWORD_DEFAULT)];
 }
 
 // ---- ポート範囲リストのパース ----------------------------
@@ -213,7 +291,7 @@ function get_listening_tcp_ports(): ?array {
 // 削除時には呼ばない (衝突したポートの削除は常に可能にする)。
 function assert_port_allowed(int $port): void {
     // 発行済みポートの再発行は制限の対象外
-    // (設定の更新・削除トークンの再発行を妨げない)
+    // (管理画面などからの操作を妨げない)
     $stmt = get_db()->prepare("SELECT COUNT(*) FROM wg_configs WHERE port = ?");
     $stmt->execute([$port]);
     if ((int)$stmt->fetchColumn() > 0) return;
