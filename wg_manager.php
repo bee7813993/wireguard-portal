@@ -433,6 +433,31 @@ class WgManager {
         return $result;
     }
 
+    // ---- 最終接続の表示 -----------------------------------
+    // ['text' => 表示, 'title' => 詳細, 'live' => 最近つながっているか]
+    // 切断の通知はないため、最後のハンドシェイクから 3 分以内を「接続中」とする
+    // (接続中はおおむね 2 分ごとにハンドシェイクする)
+    public static function connection_label(?array $hs, string $pub): array {
+        $make = fn(string $text, string $title, bool $live = false) => ['text' => $text, 'title' => $title, 'live' => $live];
+        if ($hs === null) return $make('—', 'WireGuard が止まっているか、状態を取得できません');
+        $ts = $hs[$pub] ?? null;
+        if ($ts === null) return $make('—', 'サーバーの設定にまだ反映されていません');
+        if ($ts === 0)    return $make('未接続', 'サーバーの起動後、まだ一度も接続していません');
+        $ago = max(0, time() - $ts);
+        $at  = date('Y-m-d H:i:s', $ts);
+        if ($ago < 180)   return $make('接続中', "最終ハンドシェイク: {$at}", true);
+        if ($ago < 3600)  return $make(intdiv($ago, 60) . ' 分前', $at);
+        if ($ago < 86400) return $make(intdiv($ago, 3600) . ' 時間前', $at);
+        return $make(date('Y-m-d H:i', $ts), $at);
+    }
+
+    // 1 ポート分の最終接続
+    public static function port_connection(int $port): ?array {
+        $row = self::find_row($port);
+        if (!$row) return null;
+        return self::connection_label(self::latest_handshakes(), (string)$row['client_pub']);
+    }
+
     private static function is_interface_up(string $iface): bool {
         exec('sudo wg show ' . escapeshellarg($iface) . ' 2>/dev/null', $_out, $running);
         return $running === 0;

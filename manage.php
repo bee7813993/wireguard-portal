@@ -37,7 +37,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         switch ($action) {
             case 'info':
-                echo json_encode(['ok' => true, 'data' => WgManager::port_info($port)]);
+                echo json_encode(['ok' => true, 'data' => WgManager::port_info($port) + [
+                    'connection' => WgManager::port_connection($port),
+                ]]);
                 break;
 
             case 'conf':
@@ -156,6 +158,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
       <dt>公開 URL</dt>     <dd id="i-url"></dd>
       <dt>公開方式</dt>     <dd id="i-mode"></dd>
       <dt>転送先</dt>       <dd id="i-dest"></dd>
+      <dt>最終接続</dt>     <dd id="i-conn"></dd>
       <dt>最終更新</dt>     <dd id="i-updated"></dd>
     </dl>
 
@@ -252,6 +255,12 @@ function showInfo(d) {
     ? '<span class="mode-badge https">HTTPS</span>' : '<span class="mode-badge">HTTP</span>';
   document.getElementById('i-dest').textContent = `PC (${d.client_ip}) のポート ${d.dest_port}`;
   document.getElementById('i-updated').textContent = d.updated_at;
+  if (d.connection) {
+    const c = document.getElementById('i-conn');
+    c.textContent = (d.connection.live ? '● ' : '') + d.connection.text;
+    c.title = d.connection.title;
+    c.style.color = d.connection.live ? 'var(--accent)' : '';
+  }
 
   const radio = document.querySelector(`input[name="proxy_mode"][value="${d.proxy_mode}"]`);
   if (radio) radio.checked = true;

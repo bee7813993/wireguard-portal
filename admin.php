@@ -295,20 +295,7 @@ $https_ready = WgManager::https_ready();
 
 // ---- 最終接続 (WireGuard の最終ハンドシェイク) -------------
 $handshakes = WgManager::latest_handshakes();
-// [表示する文字列, 詳細 (ツールチップ), 最近つながっているか]
-function handshake_label(?array $hs, string $pub): array {
-    if ($hs === null) return ['—', 'WireGuard が止まっているか、状態を取得できません', false];
-    $ts = $hs[$pub] ?? null;
-    if ($ts === null) return ['—', 'サーバーの設定にまだ反映されていません', false];
-    if ($ts === 0)    return ['未接続', 'サーバーの起動後、まだ一度も接続していません', false];
-    $ago = max(0, time() - $ts);
-    $at  = date('Y-m-d H:i:s', $ts);
-    // 接続中はおおむね 2 分ごとにハンドシェイクする
-    if ($ago < 180)   return ['接続中', "最終ハンドシェイク: {$at}", true];
-    if ($ago < 3600)  return [intdiv($ago, 60) . ' 分前', $at, false];
-    if ($ago < 86400) return [intdiv($ago, 3600) . ' 時間前', $at, false];
-    return [date('Y-m-d H:i', $ts), $at, false];
-}
+
 
 // ---- ログ読み込み ----------------------------------------
 $log_path  = dirname(DB_PATH) . '/portal.log';
@@ -660,7 +647,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
               </form>
             </td>
             <td style="color:var(--muted)">:<?= (int)$r['dest_port'] ?: 80 ?></td>
-            <?php [$hs_text, $hs_title, $hs_live] = handshake_label($handshakes, (string)$r['client_pub']); ?>
+            <?php ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub']); ?>
             <td title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
             <td style="color:var(--muted)" title="<?= htmlspecialchars($r['updated_at']) ?>"><?= htmlspecialchars(substr($r['updated_at'], 0, 16)) ?></td>
             <td><div class="cell-stack">
