@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS wg_configs (
     server_pub  TEXT    NOT NULL,
     delete_token TEXT   DEFAULT NULL,
     expires_at  DATETIME DEFAULT NULL,
+    last_handshake INTEGER NOT NULL DEFAULT 0,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );

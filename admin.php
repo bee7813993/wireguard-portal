@@ -90,7 +90,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_c
 
 // ---- WireGuard 設定を IPv6 対応で再適用 ------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'apply_ipv6') {
-    $res = WgManager::apply_all(true, true);
+    // 全部を作り直す (wg syncconf ではなく wg-quick down → up)
+    $res = WgManager::apply_all(true, true, true);
     if ($res['success']) {
         $success = '全ポートを再適用しました (WireGuard / iptables / nginx)。';
     } else {
@@ -306,7 +307,7 @@ if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
 // 並べ替えは画面側で行う (初期表示は最終更新の新しい順)
-$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, expires_at, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC")->fetchAll();
+$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, expires_at, last_handshake, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC")->fetchAll();
 $https_ready = WgManager::https_ready();
 
 // ---- 最終接続 (WireGuard の最終ハンドシェイク) -------------
@@ -714,8 +715,9 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
             <?php $dest = (int)$r['dest_port'] ?: 80; ?>
             <td data-v="<?= $dest ?>" style="color:var(--muted)">:<?= $dest ?></td>
             <?php
-              ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub']);
-              $hs_ts = $handshakes[(string)$r['client_pub']] ?? null;  // null = 不明 (並べ替えで最後に回す)
+              $hs_saved = (int)$r['last_handshake'];
+              ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub'], $hs_saved);
+              $hs_ts = WgManager::handshake_time($handshakes, (string)$r['client_pub'], $hs_saved);  // null = 不明 (並べ替えで最後に回す)
             ?>
             <td data-v="<?= $hs_ts === null ? '' : (int)$hs_ts ?>" title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
             <td data-v="<?= htmlspecialchars((string)$r['created_at']) ?>" style="color:var(--muted)">
