@@ -8,6 +8,7 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/wg_manager.php';
 
 $delete_mode = get_setting('delete_mode') ?: 'none';
+WgManager::purge_expired();
 
 // ---- 操作 API --------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -164,6 +165,7 @@ $prefill     = (int)($_GET['port'] ?? 0);
       <dt>転送先</dt>       <dd id="i-dest"></dd>
       <dt>最終接続</dt>     <dd id="i-conn"></dd>
       <dt>最終更新</dt>     <dd id="i-updated"></dd>
+      <dt id="i-expires-dt" hidden>削除予定</dt> <dd id="i-expires" hidden></dd>
     </dl>
 
     <div class="section-head" style="margin-top:0">設定の変更</div>
@@ -266,6 +268,10 @@ function showInfo(d) {
     ? '<span class="mode-badge https">HTTPS</span>' : '<span class="mode-badge">HTTP</span>';
   document.getElementById('i-dest').textContent = `PC (${d.client_ip}) のポート ${d.dest_port}`;
   document.getElementById('i-updated').textContent = d.updated_at;
+  // お試し用のポートだけ削除予定を出す
+  const exp = document.getElementById('i-expires');
+  exp.textContent = d.expires_at ? `${d.expires_at} ごろ (お試し用のため自動的に削除されます)` : '';
+  exp.hidden = document.getElementById('i-expires-dt').hidden = !d.expires_at;
   if (d.connection) {
     const c = document.getElementById('i-conn');
     c.textContent = (d.connection.live ? '● ' : '') + d.connection.text;

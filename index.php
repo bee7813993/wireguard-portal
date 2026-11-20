@@ -6,7 +6,12 @@ $auto_apply  = get_setting('auto_apply') === '1';
 $delete_mode = get_setting('delete_mode') ?: 'none';
 $default_dest_port = (int)(get_setting('default_dest_port') ?: 80) ?: 80;
 require_once __DIR__ . '/wg_manager.php';
+WgManager::purge_expired();
 $https_ready  = WgManager::https_ready();
+// お試し用ポート (期限つき)
+$trial_ports  = trim(get_setting('trial_ports'));
+$trial_hours  = (int)get_setting('trial_hours');
+$trial_label  = ($trial_ports !== '' && $trial_hours >= 1 && $trial_hours <= TRIAL_HOURS_MAX) ? trial_period_label($trial_hours) : '';
 $default_mode = (get_setting('default_proxy_mode') === 'https' && $https_ready) ? 'https' : 'dnat';
 $https_note   = get_setting('https_note');
 $notice       = get_setting('notice');
@@ -121,6 +126,9 @@ $notice       = get_setting('notice');
         <input type="number" id="port-input" min="1024" max="65535"
                placeholder="11090" autocomplete="off">
         <div class="error-msg" id="port-error"></div>
+        <?php if ($trial_label !== ''): ?>
+        <div class="field-hint">ポート <?= htmlspecialchars($trial_ports) ?> はお試し用です。登録から <?= $trial_label ?>で自動的に削除されます。</div>
+        <?php endif; ?>
       </div>
       <div class="input-wrap">
         <label>転送先ポート (PC 側)</label>
@@ -366,7 +374,9 @@ async function doGenerate() {
     document.getElementById('fwd-summary').textContent =
       `公開 URL: ${d.public_url} (${d.proxy_mode === 'https' ? 'HTTPS' : 'HTTP'})
 ` +
-      `外部ポート ${d.port} → PC (${d.client_ip}) のポート ${d.dest_port} に転送されます。`;
+      `外部ポート ${d.port} → PC (${d.client_ip}) のポート ${d.dest_port} に転送されます。` +
+      (d.expires_at ? `
+お試し用のポートのため、${d.expires_at} ごろに自動的に削除されます (登録から ${d.trial_period})。` : '');
 
     // 管理トークン表示
     const tokenNotice = document.getElementById('token-notice');

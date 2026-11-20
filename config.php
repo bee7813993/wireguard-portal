@@ -35,6 +35,7 @@ function get_db(): PDO {
             server_priv  TEXT    NOT NULL,
             server_pub   TEXT    NOT NULL,
             delete_token TEXT    DEFAULT NULL,
+            expires_at   DATETIME DEFAULT NULL,
             created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -62,6 +63,10 @@ function get_db(): PDO {
     if (!in_array('owner_name', $cols, true)) {
         $pdo->exec("ALTER TABLE wg_configs ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''");
     }
+    // お試し用ポートの削除予定 (UTC)。NULL なら期限なし。旧レコードは期限なし
+    if (!in_array('expires_at', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN expires_at DATETIME DEFAULT NULL");
+    }
 
     // デフォルト設定を挿入 (初回のみ)
     $defaults = [
@@ -76,6 +81,8 @@ function get_db(): PDO {
         'check_listen'  => '1',
         'blocked_ports' => '',
         'allowed_ports' => '',
+        'trial_ports'   => '',
+        'trial_hours'   => '24',
         'default_dest_port' => '80',
         'default_proxy_mode' => 'dnat',
         'https_host'     => '',
@@ -103,6 +110,14 @@ function get_setting(string $key): string {
 function set_setting(string $key, string $value): void {
     get_db()->prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
             ->execute([$key, $value]);
+}
+
+// ---- DB の時刻の表示 --------------------------------------
+// DB の時刻 (SQLite の CURRENT_TIMESTAMP) は UTC。表示は PHP のタイムゾーンにする
+function db_time(?string $utc, string $format = 'Y-m-d H:i'): string {
+    if ($utc === null || $utc === '') return '';
+    $ts = strtotime($utc . ' UTC');
+    return $ts === false ? $utc : date($format, $ts);
 }
 
 // ---- 管理者が書く表示用の文 (お知らせ・注意書き) ----------
@@ -269,6 +284,25 @@ function port_in_ranges(int $port, array $ranges): bool {
         if ($port >= $lo && $port <= $hi) return true;
     }
     return false;
+}
+
+// ---- お試し用ポート ------------------------------------
+// 管理画面の「お試し用ポート」に含まれるポートは、登録から trial_hours 時間で
+// 自動的に削除する。期限は発行時に決めて wg_configs.expires_at に保存するため、
+// あとから設定を変えても発行済みのポートの期限は変わらない。
+const TRIAL_HOURS_MAX = 8760;  // 1 年
+
+// お試し用なら期限 (時間)、そうでなければ null
+function trial_hours_for(int $port): ?int {
+    $ranges = parse_port_ranges(get_setting('trial_ports'));
+    if (!$ranges || !port_in_ranges($port, $ranges)) return null;
+    $h = (int)get_setting('trial_hours');
+    return ($h >= 1 && $h <= TRIAL_HOURS_MAX) ? $h : null;
+}
+
+// 期限の表示 (24 の倍数なら「N 日」)
+function trial_period_label(int $hours): string {
+    return $hours % 24 === 0 ? ($hours / 24) . ' 日' : "{$hours} 時間";
 }
 
 // ---- LISTEN 中の TCP ポート一覧取得 ----------------------
