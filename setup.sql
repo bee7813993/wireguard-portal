@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS wg_configs (
     server_priv TEXT    NOT NULL,
     server_pub  TEXT    NOT NULL,
     delete_token TEXT   DEFAULT NULL,
+    expires_at  DATETIME DEFAULT NULL,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );

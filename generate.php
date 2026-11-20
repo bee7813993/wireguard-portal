@@ -22,6 +22,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+// 期限切れのお試し用ポートを先に消す (そのポートを新しく発行できるように)
+WgManager::purge_expired();
+
 $body = json_decode(file_get_contents('php://input'), true);
 $port_raw = $body['port'] ?? $_POST['port'] ?? null;
 // 転送先ポート未指定時は管理画面の既定値を使う

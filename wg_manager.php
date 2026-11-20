@@ -779,8 +779,10 @@ class WgManager {
             'public_url' => self::public_url($port, $mode),
             'client_ip'  => $client_ip,
             'owner_name' => (string)($row['owner_name'] ?? ''),
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'created_at' => db_time($row['created_at'], 'Y-m-d H:i:s'),
+            'updated_at' => db_time($row['updated_at'], 'Y-m-d H:i:s'),
+            // お試し用ポートの削除予定 (期限がなければ null)
+            'expires_at' => $row['expires_at'] ? db_time($row['expires_at']) : null,
         ];
     }
 
@@ -871,6 +873,50 @@ class WgManager {
         return ['applied' => $applied];
     }
 
+    // ---- 期限切れのお試し用ポートを削除 --------------------
+    // 各画面を開いたとき (と purge_expired.php) に呼ぶ。期限切れがなければ
+    // SELECT 1 回で終わる。削除したポート番号の一覧を返す。
+    // 同時に開かれても二重に反映しないよう、ロックを取れたときだけ削除する。
+    public static function purge_expired(): array {
+        $db  = get_db();
+        $sql = "SELECT port FROM wg_configs WHERE expires_at IS NOT NULL AND expires_at <= datetime('now') ORDER BY port";
+        if (!$db->query($sql)->fetchAll(PDO::FETCH_COLUMN)) return [];
+
+        $lock = @fopen(dirname(DB_PATH) . '/purge.lock', 'c');
+        if ($lock && !flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            return [];  // ほかのリクエストが削除している
+        }
+        try {
+            // ロックを取るまでの間に削除済みのことがあるので取り直す
+            $ports = array_map('intval', $db->query($sql)->fetchAll(PDO::FETCH_COLUMN));
+            if (!$ports) return [];
+            $in = implode(',', array_fill(0, count($ports), '?'));
+            $db->prepare("DELETE FROM wg_configs WHERE port IN ({$in})")->execute($ports);
+            write_log('INFO', 'お試し用ポートの期限が切れたため削除しました: ' . implode(', ', $ports));
+
+            if (get_setting('auto_apply') === '1') {
+                try {
+                    $applied = self::apply_all(false, true);
+                    if ($applied['success']) {
+                        write_log('INFO', 'お試し用ポート削除後の自動適用完了');
+                    } else {
+                        write_log('ERROR', 'お試し用ポート削除後の自動適用失敗: ' . $applied['output']);
+                    }
+                } catch (Throwable $e) {
+                    // 画面の表示は止めない (次の適用で反映される)
+                    write_log('ERROR', 'お試し用ポート削除後の自動適用失敗: ' . $e->getMessage());
+                }
+            }
+            return $ports;
+        } finally {
+            if ($lock) {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+        }
+    }
+
     // ---- 既存ポートの設定を鍵を変えずに再生成 ------------
     public static function rebuild_client_conf(int $port): ?array {
         $row = self::find_row($port);
@@ -900,10 +946,14 @@ class WgManager {
 
         [$plaintext_token, $hashed_token] = generate_manage_token();
 
+        // お試し用ポートは削除予定を決めておく (DB の時刻に合わせて UTC)
+        $trial_hours = trial_hours_for($port);
+        $expires_at  = $trial_hours === null ? null : gmdate('Y-m-d H:i:s', time() + $trial_hours * 3600);
+
         // UPSERT (server_priv/pub はグローバル鍵を記録)
         $db->prepare("
-            INSERT INTO wg_configs (port, dest_port, proxy_mode, owner_name, client_priv, client_pub, server_priv, server_pub, delete_token, updated_at)
-            VALUES (:port, :dport, :mode, :owner, :cp, :cP, :sp, :sP, :dt, CURRENT_TIMESTAMP)
+            INSERT INTO wg_configs (port, dest_port, proxy_mode, owner_name, client_priv, client_pub, server_priv, server_pub, delete_token, expires_at, updated_at)
+            VALUES (:port, :dport, :mode, :owner, :cp, :cP, :sp, :sP, :dt, :exp, CURRENT_TIMESTAMP)
             ON CONFLICT(port) DO UPDATE SET
                 dest_port    = excluded.dest_port,
                 proxy_mode   = excluded.proxy_mode,
@@ -913,6 +963,7 @@ class WgManager {
                 server_priv  = excluded.server_priv,
                 server_pub   = excluded.server_pub,
                 delete_token = excluded.delete_token,
+                expires_at   = excluded.expires_at,
                 updated_at   = CURRENT_TIMESTAMP
         ")->execute([
             ':port'  => $port,
@@ -924,6 +975,7 @@ class WgManager {
             ':sp'    => $server_kp['priv'],
             ':sP'    => $server_kp['pub'],
             ':dt'    => $hashed_token,
+            ':exp'   => $expires_at,
         ]);
 
         // UPSERT後に実際のidを取得してIPを算出（削除後の飛び番対策）
@@ -938,7 +990,8 @@ class WgManager {
         $server_conf = self::build_full_server_conf();
         $setup_cmds  = self::build_setup_commands($port);
 
-        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip}, dest_port={$dest_port}, mode={$mode})");
+        write_log('INFO', "ポート {$port} の設定を生成しました (client_ip={$client_ip}, dest_port={$dest_port}, mode={$mode}"
+                        . ($expires_at === null ? '' : ", お試し用: 削除予定 {$expires_at} UTC") . ')');
 
         $applied = null;
         if (get_setting('auto_apply') === '1') {
@@ -961,6 +1014,8 @@ class WgManager {
             'setup_cmds'   => $setup_cmds,
             'applied'      => $applied,
             'manage_token' => $plaintext_token,
+            'expires_at'   => $expires_at === null ? null : db_time($expires_at),
+            'trial_period' => $trial_hours === null ? null : trial_period_label($trial_hours),
         ];
     }
 }

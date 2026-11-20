@@ -68,6 +68,9 @@ button:hover{opacity:.9}
 </html>
     <?php exit; }
 
+// ---- 期限切れのお試し用ポートを削除 ----------------------
+$purged_ports = WgManager::purge_expired();
+
 // ---- クライアント設定を JSON で返す (Ajax) ---------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_client_conf') {
     header('Content-Type: application/json; charset=utf-8');
@@ -196,7 +199,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         }
     }
     // ポート制限リスト: 書式を検証してから保存
-    foreach (['blocked_ports' => '禁止ポート', 'allowed_ports' => '許可ポート'] as $f => $label) {
+    foreach (['blocked_ports' => '禁止ポート', 'allowed_ports' => '許可ポート', 'trial_ports' => 'お試し用ポート'] as $f => $label) {
         if (!isset($_POST[$f])) continue;
         $spec   = trim($_POST[$f]);
         $ranges = parse_port_ranges($spec);
@@ -219,6 +222,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             }
         }
         set_setting($f, $spec);
+    }
+    // お試し用ポートの期限 (時間)
+    if (isset($_POST['trial_hours'])) {
+        $h = trim($_POST['trial_hours']);
+        if (preg_match('/^\d+$/', $h) && (int)$h >= 1 && (int)$h <= TRIAL_HOURS_MAX) {
+            set_setting('trial_hours', (string)(int)$h);
+        } else {
+            $save_errors[]              = 'お試し用ポートの期限は 1〜' . TRIAL_HOURS_MAX . ' 時間で指定してください。';
+            $invalid_specs['trial_hours'] = $h;
+        }
     }
     // HTTPS 公開: nginx 設定に埋め込む値は書式を検証してから保存
     $https_fields = [
@@ -275,6 +288,8 @@ $cfg = [
     'check_listen'  => get_setting('check_listen') !== '0' ? '1' : '0',
     'blocked_ports' => $invalid_specs['blocked_ports'] ?? get_setting('blocked_ports'),
     'allowed_ports' => $invalid_specs['allowed_ports'] ?? get_setting('allowed_ports'),
+    'trial_ports'   => $invalid_specs['trial_ports'] ?? get_setting('trial_ports'),
+    'trial_hours'   => $invalid_specs['trial_hours'] ?? (get_setting('trial_hours') ?: '24'),
     'default_dest_port' => $invalid_specs['default_dest_port'] ?? (get_setting('default_dest_port') ?: '80'),
     'default_proxy_mode' => get_setting('default_proxy_mode') ?: 'dnat',
     'https_host'     => $invalid_specs['https_host']     ?? get_setting('https_host'),
@@ -290,7 +305,8 @@ $listening_ports = get_listening_tcp_ports();
 if ($listening_ports !== null) sort($listening_ports);
 
 // ---- 発行済みポート一覧 -----------------------------------
-$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC LIMIT 100")->fetchAll();
+// 並べ替えは画面側で行う (初期表示は最終更新の新しい順)
+$rows = get_db()->query("SELECT port, dest_port, proxy_mode, owner_name, client_pub, delete_token, expires_at, created_at, updated_at FROM wg_configs ORDER BY updated_at DESC")->fetchAll();
 $https_ready = WgManager::https_ready();
 
 // ---- 最終接続 (WireGuard の最終ハンドシェイク) -------------
@@ -361,6 +377,12 @@ tr:hover td{background:#fafbfc}
 .icon-btn:hover{background:#f1f5f9;border-color:var(--border2);color:var(--text)}
 .icon-btn.ok{color:var(--accent);border-color:#a7f3d0}
 .icon-btn.ok:hover{background:#ecfdf5;border-color:var(--accent)}
+.sort-btn{display:inline-flex;align-items:center;gap:4px;padding:0;background:none;border:none;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}
+.sort-btn:hover{color:var(--text)}
+.sort-mark{display:inline-block;width:1em;color:var(--border2)}
+th[aria-sort=ascending] .sort-btn,th[aria-sort=descending] .sort-btn{color:var(--text)}
+th[aria-sort=ascending] .sort-mark,th[aria-sort=descending] .sort-mark{color:var(--accent)}
+.trial-tag{display:inline-block;padding:1px 7px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;color:#92400e;font-size:11px}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -545,6 +567,20 @@ tr:hover td{background:#fafbfc}
         </div>
 
         <div class="divider"></div>
+        <div class="section-title" style="margin-bottom:.5rem">お試し用ポート</div>
+        <div class="desc" style="margin-bottom:1rem">ここに含まれるポートは、登録から決まった時間が過ぎると自動的に削除されます。削除予定は発行時に決まるため、設定を変えても発行済みのポートには影響しません (この設定より前に発行したポートは削除されません)。削除は、だれかがポータルの画面を開いたときに行われます。時間どおりに削除したいときは README の「お試し用ポート」の cron を設定してください。</div>
+        <div class="field">
+          <label>お試し用ポート</label>
+          <div class="desc">カンマ区切り・範囲指定可 (例: 11090-11100)。空欄ならお試し用ポートはありません。許可ポートを設定している場合は、その範囲にも含めてください</div>
+          <input type="text" name="trial_ports" value="<?= htmlspecialchars($cfg['trial_ports']) ?>" placeholder="11090-11100">
+        </div>
+        <div class="field">
+          <label>削除までの時間</label>
+          <div class="desc">登録から削除までの時間 (1〜<?= TRIAL_HOURS_MAX ?>)。例: 24 = 1 日, 168 = 1 週間</div>
+          <input type="number" name="trial_hours" value="<?= htmlspecialchars($cfg['trial_hours']) ?>" min="1" max="<?= TRIAL_HOURS_MAX ?>" placeholder="24">
+        </div>
+
+        <div class="divider"></div>
         <div class="section-title" style="margin-bottom:1rem">パスワード変更 (省略可)</div>
         <div class="field">
           <label>新しいパスワード</label>
@@ -609,6 +645,9 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
   <!-- 発行済みポート一覧 -->
   <div>
     <div class="section-title">発行済みポート一覧</div>
+    <?php if ($purged_ports): ?>
+    <p class="msg-ok">お試し用ポートの期限が切れたため削除しました: <?= htmlspecialchars(implode(', ', $purged_ports)) ?></p>
+    <?php endif; ?>
     <?php if ($issued_token): ?>
     <div class="card" style="margin-bottom:1rem;background:#fffbeb;border-color:#fde68a">
       <p style="font-size:13px;color:#92400e;margin-bottom:.6rem">ポート <?= (int)$issued_token[0] ?> の管理トークンを発行しました。この表示は一度だけです。利用者に伝えてください (以前のトークンは無効になりました)。</p>
@@ -623,12 +662,21 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
       <table class="ports">
         <thead>
           <tr>
-            <th>ポート</th>
-            <th>お名前</th>
-            <th>方式</th>
-            <th>転送先</th>
-            <th>最終接続</th>
-            <th>最終更新</th>
+            <?php
+              // [並べ替えのキー, 見出し, 値の種類, 最初にクリックしたときの向き]
+              $sort_cols = [
+                  ['port',      'ポート',   'num',  'asc'],
+                  ['owner',     'お名前',   'text', 'asc'],
+                  ['mode',      '方式',     'text', 'asc'],
+                  ['dest',      '転送先',   'num',  'asc'],
+                  ['handshake', '最終接続', 'num',  'desc'],
+                  ['created',   '登録日',   'text', 'desc'],
+                  ['updated',   '最終更新', 'text', 'desc'],
+              ];
+            ?>
+            <?php foreach ($sort_cols as [$key, $label, $type, $first]): ?>
+            <th data-sort="<?= $key ?>" data-type="<?= $type ?>" data-first="<?= $first ?>" aria-sort="none"><button type="button" class="sort-btn" title="<?= $label ?>で並べ替え"><?= $label ?><span class="sort-mark" aria-hidden="true">↕</span></button></th>
+            <?php endforeach; ?>
             <th></th>
           </tr>
         </thead>
@@ -636,9 +684,9 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
           <?php foreach ($rows as $r): ?>
           <tr>
             <?php $is_https = ($r['proxy_mode'] ?? 'dnat') === 'https'; ?>
-            <td><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
-            <td>
-              <?php $owner = (string)($r['owner_name'] ?? ''); ?>
+            <td data-v="<?= (int)$r['port'] ?>"><span class="port-badge" title="クライアント公開鍵: <?= htmlspecialchars($r['client_pub']) ?>"><?= (int)$r['port'] ?></span></td>
+            <?php $owner = (string)($r['owner_name'] ?? ''); ?>
+            <td data-v="<?= htmlspecialchars($owner) ?>">
               <form method="post" class="name-edit">
                 <input type="hidden" name="action" value="set_owner">
                 <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
@@ -653,7 +701,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 </span>
               </form>
             </td>
-            <td>
+            <td data-v="<?= $is_https ? 'HTTPS' : 'HTTP' ?>">
               <form method="post" class="cell-stack"
                     onsubmit="return confirm('ポート <?= (int)$r['port'] ?> を <?= $is_https ? 'HTTP' : 'HTTPS' ?> に切り替えますか？')">
                 <input type="hidden" name="action" value="set_mode">
@@ -663,10 +711,22 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 <button type="submit" class="conf-btn" <?= (!$is_https && !$https_ready) ? 'disabled title="HTTPS 公開のホスト名が未設定です"' : '' ?>>→ <?= $is_https ? 'HTTP' : 'HTTPS' ?></button>
               </form>
             </td>
-            <td style="color:var(--muted)">:<?= (int)$r['dest_port'] ?: 80 ?></td>
-            <?php ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub']); ?>
-            <td title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
-            <td style="color:var(--muted)" title="<?= htmlspecialchars($r['updated_at']) ?>"><?= htmlspecialchars(substr($r['updated_at'], 0, 16)) ?></td>
+            <?php $dest = (int)$r['dest_port'] ?: 80; ?>
+            <td data-v="<?= $dest ?>" style="color:var(--muted)">:<?= $dest ?></td>
+            <?php
+              ['text' => $hs_text, 'title' => $hs_title, 'live' => $hs_live] = WgManager::connection_label($handshakes, (string)$r['client_pub']);
+              $hs_ts = $handshakes[(string)$r['client_pub']] ?? null;  // null = 不明 (並べ替えで最後に回す)
+            ?>
+            <td data-v="<?= $hs_ts === null ? '' : (int)$hs_ts ?>" title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
+            <td data-v="<?= htmlspecialchars((string)$r['created_at']) ?>" style="color:var(--muted)">
+              <div class="cell-stack">
+                <span title="<?= htmlspecialchars(db_time($r['created_at'], 'Y-m-d H:i:s')) ?>"><?= htmlspecialchars(db_time($r['created_at'])) ?></span>
+                <?php if (!empty($r['expires_at'])): ?>
+                <span class="trial-tag" title="お試し用のため、この時刻を過ぎると自動的に削除されます">削除予定 <?= htmlspecialchars(db_time($r['expires_at'], 'm-d H:i')) ?></span>
+                <?php endif; ?>
+              </div>
+            </td>
+            <td data-v="<?= htmlspecialchars((string)$r['updated_at']) ?>" style="color:var(--muted)" title="<?= htmlspecialchars(db_time($r['updated_at'], 'Y-m-d H:i:s')) ?>"><?= htmlspecialchars(db_time($r['updated_at'])) ?></td>
             <td><div class="cell-stack">
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
                 <input type="hidden" name="action" value="reset_token">
@@ -749,6 +809,60 @@ function cancelName(el) {
   form.querySelector('.name-input').hidden = true;
   form.querySelector('.name-view').hidden  = false;
 }
+// ---- ポート一覧の並べ替え (見出しをクリック。選んだ順はこのブラウザに覚える) ----
+(function () {
+  const table = document.querySelector('table.ports');
+  if (!table) return;
+  const tbody = table.tBodies[0];
+  const ths   = [...table.tHead.rows[0].cells];
+  const coll  = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+  const KEY   = 'wgportal-admin-port-sort';
+  const col   = key => ths.findIndex(th => th.dataset.sort === key);
+  const portIdx = col('port');
+
+  function apply(key, dir) {
+    const i   = col(key);
+    const num = ths[i].dataset.type === 'num';
+    const v   = r => r.cells[i].dataset.v ?? '';
+    const cmp = (a, b) => {
+      const va = v(a), vb = v(b);
+      // 空 (名前が未登録・接続状態が不明) は向きに関係なく最後
+      if (va === '' || vb === '') return (va === '') - (vb === '');
+      const c = num ? Number(va) - Number(vb) : coll.compare(va, vb);
+      return dir === 'desc' ? -c : c;
+    };
+    const port = r => Number(r.cells[portIdx].dataset.v);
+    [...tbody.rows]
+      .sort((a, b) => cmp(a, b) || port(a) - port(b))
+      .forEach(r => tbody.appendChild(r));
+    ths.forEach((th, j) => {
+      if (!th.dataset.sort) return;
+      const on = j === i;
+      th.setAttribute('aria-sort', on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none');
+      th.querySelector('.sort-mark').textContent = on ? (dir === 'asc' ? '▲' : '▼') : '↕';
+    });
+  }
+
+  // 初期表示はサーバーの並び (最終更新の新しい順)
+  let state = { key: 'updated', dir: 'desc' };
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved && (saved.dir === 'asc' || saved.dir === 'desc') && col(saved.key) >= 0) state = saved;
+  } catch (e) { /* 覚えられない環境では毎回初期の並び */ }
+  apply(state.key, state.dir);
+
+  ths.forEach(th => {
+    if (!th.dataset.sort) return;
+    th.querySelector('.sort-btn').addEventListener('click', () => {
+      const key = th.dataset.sort;
+      const dir = state.key === key ? (state.dir === 'asc' ? 'desc' : 'asc') : th.dataset.first;
+      state = { key, dir };
+      apply(key, dir);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* 覚えられなくても並べ替えはできる */ }
+    });
+  });
+})();
+
 let _confText = '';
 let _confPort = 0;
 
