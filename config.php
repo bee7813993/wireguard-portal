@@ -36,6 +36,7 @@ function get_db(): PDO {
             server_pub   TEXT    NOT NULL,
             delete_token TEXT    DEFAULT NULL,
             expires_at   DATETIME DEFAULT NULL,
+            last_handshake INTEGER NOT NULL DEFAULT 0,
             created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -66,6 +67,11 @@ function get_db(): PDO {
     // お試し用ポートの削除予定 (UTC)。NULL なら期限なし。旧レコードは期限なし
     if (!in_array('expires_at', $cols, true)) {
         $pdo->exec("ALTER TABLE wg_configs ADD COLUMN expires_at DATETIME DEFAULT NULL");
+    }
+    // 最終ハンドシェイクの記録 (UNIX 時刻、0 = 記録なし)。
+    // WireGuard はインターフェースを止めると忘れるため DB にも残す
+    if (!in_array('last_handshake', $cols, true)) {
+        $pdo->exec("ALTER TABLE wg_configs ADD COLUMN last_handshake INTEGER NOT NULL DEFAULT 0");
     }
 
     // デフォルト設定を挿入 (初回のみ)

@@ -96,6 +96,18 @@ class WgManager {
         return $conf . $peer_blocks;
     }
 
+    // ---- wg syncconf に渡す設定 -----------------------------
+    // wg syncconf は wg-quick 専用の項目 (Address・PostUp など) を受け付けないため、
+    // WireGuard 本体の項目 (鍵・待ち受けポート・ピア) だけで作る。
+    private static function build_wg_conf(): string {
+        [, , $peer_blocks] = self::build_server_parts();
+        $server_kp = get_or_create_server_keypair();
+        return "[Interface]\n"
+             . "ListenPort = " . (int)get_setting('wg_port') . "\n"
+             . "PrivateKey = {$server_kp['priv']}\n"
+             . $peer_blocks;
+    }
+
     // ---- サーバー設定の部品: [PostUp 行, PostDown 行, [Peer] ブロック] --
     // https のポートは nginx が受けるため DNAT / FORWARD を書かない
     // (ピアの定義は方式に関係なく必要)。
@@ -265,6 +277,7 @@ class WgManager {
 
         $out1 = [];
         if ($running === 0) {
+            self::latest_handshakes();  // 止める前に最終接続を DB に残す
             // wg-quick down がPostDownを実行してiptablesを削除する
             exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
         }
@@ -417,8 +430,10 @@ class WgManager {
     }
 
     // ---- ピアごとの最終ハンドシェイク時刻 -----------------
-    // [公開鍵 => UNIX 時刻 (0 = まだ接続していない)]。
-    // インターフェースが止まっているなど取得できなければ null
+    // [公開鍵 => UNIX 時刻 (0 = インターフェースの起動後まだ接続していない)]。
+    // インターフェースが止まっているなど取得できなければ null。
+    // WireGuard はこの時刻をインターフェースの中にしか持たず、止めると消えるため、
+    // 読めたら DB (wg_configs.last_handshake) にも残す。
     public static function latest_handshakes(): ?array {
         $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
         $out = [];
@@ -430,32 +445,57 @@ class WgManager {
                 $result[$m[1]] = (int)$m[2];
             }
         }
+        self::save_handshakes($result);
         return $result;
+    }
+
+    // 新しくなった時刻だけを DB に書く
+    private static function save_handshakes(array $hs): void {
+        $hs = array_filter($hs, fn($ts) => $ts > 0);
+        if (!$hs) return;
+        $db   = get_db();
+        $stmt = $db->prepare("UPDATE wg_configs SET last_handshake = ? WHERE client_pub = ? AND last_handshake < ?");
+        $db->beginTransaction();
+        foreach ($hs as $pub => $ts) $stmt->execute([$ts, $pub, $ts]);
+        $db->commit();
+    }
+
+    // ---- 最終接続の時刻 -----------------------------------
+    // WireGuard の値と DB に残した値の新しいほう。
+    // 不明 (WireGuard から取れず記録もない) なら null、まだ一度も接続していなければ 0
+    public static function handshake_time(?array $hs, string $pub, int $saved): ?int {
+        $live = $hs[$pub] ?? null;
+        if ($live === null && $saved === 0) return null;
+        return max((int)$live, $saved);
     }
 
     // ---- 最終接続の表示 -----------------------------------
     // ['text' => 表示, 'title' => 詳細, 'live' => 最近つながっているか]
     // 切断の通知はないため、最後のハンドシェイクから 3 分以内を「接続中」とする
-    // (接続中はおおむね 2 分ごとにハンドシェイクする)
-    public static function connection_label(?array $hs, string $pub): array {
+    // (接続中はおおむね 2 分ごとにハンドシェイクする)。
+    // $saved は DB に残した時刻 (WireGuard を起動し直しても消えない)
+    public static function connection_label(?array $hs, string $pub, int $saved = 0): array {
         $make = fn(string $text, string $title, bool $live = false) => ['text' => $text, 'title' => $title, 'live' => $live];
-        if ($hs === null) return $make('—', 'WireGuard が止まっているか、状態を取得できません');
-        $ts = $hs[$pub] ?? null;
-        if ($ts === null) return $make('—', 'サーバーの設定にまだ反映されていません');
-        if ($ts === 0)    return $make('未接続', 'サーバーの起動後、まだ一度も接続していません');
-        $ago = max(0, time() - $ts);
-        $at  = date('Y-m-d H:i:s', $ts);
-        if ($ago < 180)   return $make('接続中', "最終ハンドシェイク: {$at}", true);
-        if ($ago < 3600)  return $make(intdiv($ago, 60) . ' 分前', $at);
-        if ($ago < 86400) return $make(intdiv($ago, 3600) . ' 時間前', $at);
-        return $make(date('Y-m-d H:i', $ts), $at);
+        $ts = self::handshake_time($hs, $pub, $saved);
+        if ($ts === null) {
+            return $make('—', $hs === null ? 'WireGuard が止まっているか、状態を取得できません' : 'サーバーの設定にまだ反映されていません');
+        }
+        if ($ts === 0) return $make('未接続', '登録してから、まだ一度も接続していません');
+        $ago  = max(0, time() - $ts);
+        $at   = date('Y-m-d H:i:s', $ts);
+        $note = $hs === null ? ' (WireGuard の状態を取得できないため、記録した時刻です)' : '';
+        if ($ago < 180 && $hs !== null) return $make('接続中', "最終ハンドシェイク: {$at}", true);
+        if ($ago < 3600)  return $make(max(1, intdiv($ago, 60)) . ' 分前', $at . $note);
+        if ($ago < 86400) return $make(intdiv($ago, 3600) . ' 時間前', $at . $note);
+        return $make(date('Y-m-d H:i', $ts), $at . $note);
     }
 
     // 1 ポート分の最終接続
     public static function port_connection(int $port): ?array {
+        $hs  = self::latest_handshakes();  // 先に読んで DB に残す
         $row = self::find_row($port);
         if (!$row) return null;
-        return self::connection_label(self::latest_handshakes(), (string)$row['client_pub']);
+        return self::connection_label($hs, (string)$row['client_pub'], (int)$row['last_handshake']);
     }
 
     private static function is_interface_up(string $iface): bool {
@@ -464,7 +504,8 @@ class WgManager {
     }
 
     // ---- サーバーへ設定を適用 (wg-quick down → up) --------
-    // ピアが増減したときに使う。全トンネルが数秒切れる。
+    // インターフェースを作り直す。全トンネルが数秒切れる。
+    // 管理画面の「全ポートを再適用」と、wg syncconf を使えないときに使う。
     public static function apply_server_config(): array {
         $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
 
@@ -474,8 +515,10 @@ class WgManager {
         }
 
         // インターフェースが起動中なら一度止める
+        // (止めると最終ハンドシェイクが消えるので、先に DB に残す)
         $out1 = [];
         if (self::is_interface_up($iface)) {
+            self::latest_handshakes();
             exec('sudo wg-quick down ' . escapeshellarg($iface) . ' 2>&1', $out1, $s1);
         }
 
@@ -510,7 +553,55 @@ class WgManager {
         if ($err !== null) {
             return ['success' => false, 'output' => $err];
         }
+        return self::replace_rules($iface);
+    }
 
+    // ---- ピアの増減をインターフェースを止めずに反映 --------
+    // ポートの発行・削除で使う。wg syncconf は今の状態との差分 (増えた・減ったピア)
+    // だけを反映するので、ほかのトンネルは切れず、最終ハンドシェイクも消えない。
+    // sudoers に wg syncconf がないなど使えないときは、従来どおり作り直す。
+    public static function apply_peer_change(): array {
+        $iface = self::sanitize_interface(get_setting('wg_interface') ?: 'wg0');
+        if (!self::is_interface_up($iface)) {
+            return self::apply_server_config();
+        }
+
+        // 再起動後もこの内容で立ち上がるよう、設定ファイルも書き直す
+        $err = self::write_server_conf($iface, self::build_full_server_conf());
+        if ($err !== null) {
+            return ['success' => false, 'output' => $err];
+        }
+
+        $sync_err = self::sync_peers($iface);
+        if ($sync_err !== null) {
+            write_log('WARN', "wg syncconf を使えないため、インターフェースを作り直して反映します"
+                            . " (sudoers に wg syncconf を追加すると、ほかのトンネルを切らずに反映できます): {$sync_err}");
+            return self::apply_server_config();
+        }
+        write_log('INFO', "ピアを反映しました (wg syncconf): {$iface}");
+        return self::replace_rules($iface);
+    }
+
+    // wg syncconf にピアの設定を渡す。失敗時はエラーメッセージ、成功時は null
+    // (秘密鍵を含むためファイルに書かず、標準入力から渡す)
+    private static function sync_peers(string $iface): ?string {
+        $proc = proc_open(
+            'sudo -n wg syncconf ' . escapeshellarg($iface) . ' /dev/stdin',
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes
+        );
+        if (!is_resource($proc)) return 'wg syncconf を実行できませんでした';
+        fwrite($pipes[0], self::build_wg_conf());
+        fclose($pipes[0]);
+        $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $rc = proc_close($proc);
+        return $rc === 0 ? null : (trim($out) ?: "終了コード {$rc}");
+    }
+
+    // ---- iptables のポータル製ルールを DB の内容に入れ替える --
+    private static function replace_rules(string $iface): array {
         [$up_lines] = self::build_server_parts();
         self::flush_stale_iptables($iface);
 
@@ -719,9 +810,12 @@ class WgManager {
     //               false = HTTPS が減る向き (DNAT を戻してから nginx を外す)
     //               DNAT が残っている間は外部からの通信を DNAT が先に取るので、
     //               この順なら切り替えで途切れない。
-    // $peers_changed: false ならピアは同じなので iptables だけを入れ替える。
-    public static function apply_all(bool $nginx_first = true, bool $peers_changed = true): array {
-        $wg    = fn() => $peers_changed ? self::apply_server_config() : self::reapply_rules();
+    // $peers_changed: true ならピアの増減を wg syncconf で反映する (止めない)。
+    //                false ならピアは同じなので iptables だけを入れ替える。
+    // $restart:       true ならインターフェースを作り直す (全ポートを再適用)。
+    public static function apply_all(bool $nginx_first = true, bool $peers_changed = true, bool $restart = false): array {
+        $wg    = fn() => $restart ? self::apply_server_config()
+                       : ($peers_changed ? self::apply_peer_change() : self::reapply_rules());
         $nginx = fn() => self::apply_nginx_config();
         $steps = $nginx_first ? [$nginx, $wg] : [$wg, $nginx];
 
@@ -964,6 +1058,7 @@ class WgManager {
                 server_pub   = excluded.server_pub,
                 delete_token = excluded.delete_token,
                 expires_at   = excluded.expires_at,
+                last_handshake = 0,
                 updated_at   = CURRENT_TIMESTAMP
         ")->execute([
             ':port'  => $port,
