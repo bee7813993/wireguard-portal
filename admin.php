@@ -345,7 +345,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 .top-link:hover{background:#e0f2fe;border-color:var(--accent2)}
 .logout{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;padding:4px 12px;border:1px solid var(--border2);border-radius:6px;background:var(--surface);transition:background .12s,color .12s}
 .logout:hover{color:var(--text);background:#f3f7fa}
-main{max-width:860px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direction:column;gap:2rem}
+main{max-width:960px;margin:0 auto;padding:2.5rem 1.5rem;display:flex;flex-direction:column;gap:2rem}
 .section-title{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:1rem}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.75rem;box-shadow:var(--shadow)}
 .field{margin-bottom:1rem}
@@ -366,13 +366,15 @@ td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text);wor
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#fafbfc}
 .ports-wrap{overflow-x:auto}
-.ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 10px}
+.ports th,.ports td{white-space:nowrap;word-break:normal;padding:10px 8px}
+.ports .dt{display:flex;flex-direction:column;line-height:1.35}
+.ports .dt .time{font-size:11px;color:#94a3b8}
 .cell-stack{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
 .cell-row{display:flex;gap:6px;align-items:center}
 .name-edit{display:flex;align-items:center;gap:4px}
 .name-view,.name-input{display:flex;align-items:center;gap:4px}
 .name-view[hidden],.name-input[hidden]{display:none}
-.name-text{font-family:var(--sans);font-size:13px;color:var(--text)}
+.name-text{font-family:var(--sans);font-size:13px;color:var(--text);max-width:7em;overflow:hidden;text-overflow:ellipsis}
 .name-text.empty{color:var(--muted);font-size:12px}
 .icon-btn{width:26px;height:26px;display:inline-grid;place-items:center;padding:0;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
 .icon-btn:hover{background:#f1f5f9;border-color:var(--border2);color:var(--text)}
@@ -383,7 +385,7 @@ tr:hover td{background:#fafbfc}
 .sort-mark{display:inline-block;width:1em;color:var(--border2)}
 th[aria-sort=ascending] .sort-btn,th[aria-sort=descending] .sort-btn{color:var(--text)}
 th[aria-sort=ascending] .sort-mark,th[aria-sort=descending] .sort-mark{color:var(--accent)}
-.trial-tag{display:inline-block;padding:1px 7px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;color:#92400e;font-size:11px}
+.trial-tag{display:inline-flex;flex-direction:column;line-height:1.35;padding:2px 7px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;color:#92400e;font-size:11px}
 .port-badge{display:inline-block;padding:3px 11px;background:#d1fae5;color:#065f46;border-radius:5px;font-size:11px;font-weight:500}
 .no-rows{text-align:center;padding:2rem;color:var(--muted);font-family:var(--mono);font-size:13px}
 .del-btn{padding:4px 13px;background:transparent;border:1px solid #fca5a5;border-radius:5px;color:var(--err);font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s,border-color .12s;white-space:nowrap}
@@ -692,7 +694,7 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
                 <input type="hidden" name="action" value="set_owner">
                 <input type="hidden" name="owner_port" value="<?= (int)$r['port'] ?>">
                 <span class="name-view">
-                  <span class="name-text<?= $owner === '' ? ' empty' : '' ?>"><?= $owner === '' ? '未登録' : htmlspecialchars($owner) ?></span>
+                  <span class="name-text<?= $owner === '' ? ' empty' : '' ?>"<?= $owner === '' ? '' : ' title="' . htmlspecialchars($owner) . '"' ?>><?= $owner === '' ? '未登録' : htmlspecialchars($owner) ?></span>
                   <button type="button" class="icon-btn" title="名前を編集" aria-label="名前を編集" onclick="editName(this)">✎</button>
                 </span>
                 <span class="name-input" hidden>
@@ -722,13 +724,13 @@ echo 'ip6table_nat' | sudo tee -a /etc/modules</code>
             <td data-v="<?= $hs_ts === null ? '' : (int)$hs_ts ?>" title="<?= htmlspecialchars($hs_title) ?>" style="color:<?= $hs_live ? 'var(--accent)' : 'var(--muted)' ?>"><?= $hs_live ? '● ' : '' ?><?= htmlspecialchars($hs_text) ?></td>
             <td data-v="<?= htmlspecialchars((string)$r['created_at']) ?>" style="color:var(--muted)">
               <div class="cell-stack">
-                <span title="<?= htmlspecialchars(db_time($r['created_at'], 'Y-m-d H:i:s')) ?>"><?= htmlspecialchars(db_time($r['created_at'])) ?></span>
+                <span class="dt" title="<?= htmlspecialchars(db_time($r['created_at'], 'Y-m-d H:i:s')) ?>"><?= htmlspecialchars(db_time($r['created_at'], 'Y-m-d')) ?><span class="time"><?= htmlspecialchars(db_time($r['created_at'], 'H:i')) ?></span></span>
                 <?php if (!empty($r['expires_at'])): ?>
-                <span class="trial-tag" title="お試し用のため、この時刻を過ぎると自動的に削除されます">削除予定 <?= htmlspecialchars(db_time($r['expires_at'], 'm-d H:i')) ?></span>
+                <span class="trial-tag" title="お試し用のため、この時刻を過ぎると自動的に削除されます"><span>削除予定</span><span><?= htmlspecialchars(db_time($r['expires_at'], 'm-d H:i')) ?></span></span>
                 <?php endif; ?>
               </div>
             </td>
-            <td data-v="<?= htmlspecialchars((string)$r['updated_at']) ?>" style="color:var(--muted)" title="<?= htmlspecialchars(db_time($r['updated_at'], 'Y-m-d H:i:s')) ?>"><?= htmlspecialchars(db_time($r['updated_at'])) ?></td>
+            <td data-v="<?= htmlspecialchars((string)$r['updated_at']) ?>" style="color:var(--muted)" title="<?= htmlspecialchars(db_time($r['updated_at'], 'Y-m-d H:i:s')) ?>"><span class="dt"><?= htmlspecialchars(db_time($r['updated_at'], 'Y-m-d')) ?><span class="time"><?= htmlspecialchars(db_time($r['updated_at'], 'H:i')) ?></span></span></td>
             <td><div class="cell-stack">
               <form method="post" onsubmit="return confirm('ポート <?= (int)$r['port'] ?> の管理トークンを<?= empty($r['delete_token']) ? '発行' : '再発行 (以前のトークンは無効)' ?>しますか？')">
                 <input type="hidden" name="action" value="reset_token">

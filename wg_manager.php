@@ -487,7 +487,8 @@ class WgManager {
         if ($ago < 180 && $hs !== null) return $make('接続中', "最終ハンドシェイク: {$at}", true);
         if ($ago < 3600)  return $make(max(1, intdiv($ago, 60)) . ' 分前', $at . $note);
         if ($ago < 86400) return $make(intdiv($ago, 3600) . ' 時間前', $at . $note);
-        return $make(date('Y-m-d H:i', $ts), $at . $note);
+        if ($ago < 86400 * 30) return $make(intdiv($ago, 86400) . ' 日前', $at . $note);
+        return $make(date('Y-m-d', $ts), $at . $note);
     }
 
     // 1 ポート分の最終接続
