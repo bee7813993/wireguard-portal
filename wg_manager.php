@@ -53,9 +53,13 @@ class WgManager {
         $client_ip6 = $subnet_ipv6 . dechex($ipv4_last);
         $server_ip6 = $subnet_ipv6 . '1';
 
+        // MTU の小さい回線で大きいパケットが捨てられないよう、MTU を明示する (config.php の client_mtu)
+        $mtu = client_mtu();
+
         return "[Interface]\n"
              . "PrivateKey = {$client_priv}\n"
              . "Address = {$client_ip}/24, {$client_ip6}/64\n"
+             . ($mtu !== null ? "MTU = {$mtu}\n" : '')
              . "DNS = 1.1.1.1\n"
              . "\n"
              . "[Peer]\n"

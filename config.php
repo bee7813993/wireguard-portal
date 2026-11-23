@@ -90,6 +90,7 @@ function get_db(): PDO {
         'trial_ports'   => '',
         'trial_hours'   => '24',
         'default_dest_port' => '80',
+        'client_mtu'    => '1360',
         'default_proxy_mode' => 'dnat',
         'https_host'     => '',
         'https_cert'     => '',
@@ -210,6 +211,34 @@ function validate_dest_port(mixed $port): int {
         throw new InvalidArgumentException('転送先ポート番号は 1〜65535 の範囲で指定してください。');
     }
     return $p;
+}
+
+// ---- クライアント設定の MTU ------------------------------
+// PPPoE など MTU の小さい回線では、既定の 1420 だとトンネルを通るパケットが
+// 回線の上限を超えて黙って捨てられ、長い URL のリクエストなど大きい通信だけが届かなくなる。
+// クライアント側の MTU を下げると、TCP の MSS も下がって両方向の通信がその大きさに収まる。
+// 空なら MTU 行を出さない (WireGuard の自動設定に任せる)。
+const CLIENT_MTU_MIN = 1280;
+const CLIENT_MTU_MAX = 1420;
+
+// 管理画面の入力を検証する。戻り値は保存する文字列 (空または数値)
+function validate_client_mtu(mixed $mtu): string {
+    $s = trim((string)$mtu);
+    if ($s === '') return '';
+    if (!ctype_digit($s) || (int)$s < CLIENT_MTU_MIN || (int)$s > CLIENT_MTU_MAX) {
+        throw new InvalidArgumentException('MTU は ' . CLIENT_MTU_MIN . '〜' . CLIENT_MTU_MAX . ' の範囲で指定してください (空欄なら MTU 行を出しません)。');
+    }
+    return (string)(int)$s;
+}
+
+// 発行する .conf に書く MTU。書かない場合は null
+function client_mtu(): ?int {
+    try {
+        $s = validate_client_mtu(get_setting('client_mtu'));
+    } catch (InvalidArgumentException $e) {
+        return null; // 不正な値が保存されていても .conf の発行は止めない
+    }
+    return $s === '' ? null : (int)$s;
 }
 
 // ---- 登録者の名前バリデーション ------------------------
