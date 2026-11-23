@@ -199,6 +199,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             $invalid_specs['default_dest_port'] = trim($_POST['default_dest_port']);
         }
     }
+    // 発行する .conf の MTU: 範囲を検証してから保存 (空欄は MTU 行なし)
+    if (isset($_POST['client_mtu'])) {
+        try {
+            set_setting('client_mtu', validate_client_mtu($_POST['client_mtu']));
+        } catch (InvalidArgumentException $e) {
+            $save_errors[]               = $e->getMessage();
+            $invalid_specs['client_mtu'] = trim($_POST['client_mtu']);
+        }
+    }
     // ポート制限リスト: 書式を検証してから保存
     foreach (['blocked_ports' => '禁止ポート', 'allowed_ports' => '許可ポート', 'trial_ports' => 'お試し用ポート'] as $f => $label) {
         if (!isset($_POST[$f])) continue;
@@ -292,6 +301,7 @@ $cfg = [
     'trial_ports'   => $invalid_specs['trial_ports'] ?? get_setting('trial_ports'),
     'trial_hours'   => $invalid_specs['trial_hours'] ?? (get_setting('trial_hours') ?: '24'),
     'default_dest_port' => $invalid_specs['default_dest_port'] ?? (get_setting('default_dest_port') ?: '80'),
+    'client_mtu'        => $invalid_specs['client_mtu'] ?? get_setting('client_mtu'),
     'default_proxy_mode' => get_setting('default_proxy_mode') ?: 'dnat',
     'https_host'     => $invalid_specs['https_host']     ?? get_setting('https_host'),
     'https_cert'     => $invalid_specs['https_cert']     ?? get_setting('https_cert'),
@@ -468,6 +478,11 @@ th[aria-sort=ascending] .sort-mark,th[aria-sort=descending] .sort-mark{color:var
           <label>転送先ポートの既定値 (PC 側)</label>
           <div class="desc">DNAT の宛先となるトンネル内 PC の待ち受けポート。トップ画面のフォームの初期値として使われ、利用者が個別に変更できます (例: 80, 8000)</div>
           <input type="number" name="default_dest_port" value="<?= htmlspecialchars($cfg['default_dest_port']) ?>" min="1" max="65535" placeholder="80">
+        </div>
+        <div class="field">
+          <label>発行する設定の MTU</label>
+          <div class="desc">利用者に渡す .conf の [Interface] に書く MTU (<?= CLIENT_MTU_MIN ?>〜<?= CLIENT_MTU_MAX ?>)。PPPoE など MTU の小さい回線では、既定の 1420 のままだと長い URL のリクエストなど大きい通信だけが届かなくなります。空欄にすると MTU 行を出しません。変更は、これから発行する設定と「.conf 再取得」で取り直した設定に反映されます</div>
+          <input type="number" name="client_mtu" value="<?= htmlspecialchars($cfg['client_mtu']) ?>" min="<?= CLIENT_MTU_MIN ?>" max="<?= CLIENT_MTU_MAX ?>" placeholder="1360">
         </div>
         <div class="field">
           <label>設定生成時に自動適用</label>
